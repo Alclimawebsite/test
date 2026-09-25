@@ -17,8 +17,12 @@ Conventions
   every market starting in hour h ends at h+1:00 at the latest.
 * Out-of-sample leaders for a decision taken at time t: hour ``H = floor_hour(t - 120 s)``;
   leaders = top K wallets by P&L summed over the markets starting in ``[H - L, H)`` (L = 1 h or
-  6 h). All those markets ended at H:00 <= t - 120 s, so their outcome and fills were public
-  (resolution ~50 s after the end, Data API delay ~10 s). The current hour is never used.
+  6 h). All those markets ended at H:00 <= t - 120 s, so their outcome was public (resolution
+  ~50 s after the end, Data API delay ~10 s). The current hour is never used. Caveat: a few
+  post-close "cash-out" fills (outcome already fixed by TWAP60 at E) still happen after E, up to
+  E + 225 s; only 85 fills ($52 k of $38 M) are later than E + 120 s, so the ranking may use
+  < 0.2 % of fills that were not yet public at the decision. No copied fill is itself part of the
+  ranking window (checked: 0 events).
 * Evaluation period for questions 4-5: decision hours from start + 6 h (so that L = 1 h and
   L = 6 h are compared on the same trades).
 * Copy trade: for each BUY fill (maker or taker) of a leader at block time tau (fills of the same
@@ -461,7 +465,7 @@ def q2_profile(a: dict, hourly: pd.DataFrame, is_rank: np.ndarray, pnl: pd.DataF
             "fees_over_volume": float(h_["fees"].sum() / h_["volume"].sum()),
             "win_rate_markets_median": float(h_["win_rate"].median()),
             "markets_per_wallet_hour_median": float(h_["n_markets"].median()),
-            "share_wallet_hours_24plus_markets": float((h_["n_markets"] >= 24).mean()),
+            "share_wallet_hours_25plus_markets": float((h_["n_markets"] >= 25).mean()),
             "fills_per_wallet_hour_median": float(h_["n_trades"].median()),
             "taker_share_of_volume": float(a["notional"][g & a["taker"]].sum() / vol.sum()),
             "share_wallet_hours_maker_dominant": float((h_["taker_share"] < 0.2).mean()),
@@ -692,7 +696,9 @@ def q4_copy(ev: pd.DataFrame, fills: dict, ranks: dict[int, np.ndarray], is_rank
     ris = np.where(ok_hs, is_rank[hs, w], 0)
     groups.append(("in_sample_fuite", 10, 0, in_eval & (ris >= 1) & (ris <= 10)))
 
-    n_cells = len([g for g in groups if g[0] == "hors_echantillon"]) * len(DELAYS) * 2
+    estimators = ("first", "vwap", "best")
+    # every out-of-sample (K, L) x delay x price estimator actually reported counts as one test
+    n_cells = len([g for g in groups if g[0] == "hors_echantillon"]) * len(DELAYS) * len(estimators)
     z_bonf = float(norm.ppf(1 - 0.05 / (2 * n_cells)))
     rows = []
     for name, K, L, mask in groups:
@@ -701,7 +707,7 @@ def q4_copy(ev: pd.DataFrame, fills: dict, ranks: dict[int, np.ndarray], is_rank
         for d in DELAYS:
             f = fills[d]
             ok = mask & f["ok"]
-            for est in ("first", "vwap", "best"):
+            for est in estimators:
                 p = f[est][ok]
                 gross = won[ok] - p
                 pnl_s = gross - fee_per_share(p)
@@ -969,7 +975,7 @@ def chart_timing_window(tw: pd.DataFrame, duration: str, period: str, path: Path
         s["bin"] = (s["bin_start_s"] + 60) // bin_s * bin_s - 60
         b = s.groupby("bin")["share_of_group_fills"].sum()
         edges = np.append(b.index.to_numpy(), b.index[-1] + bin_s)
-        ax.stairs(b.to_numpy(), edges, color=color, lw=1.6, label=label, baseline=None)
+        ax.stairs(b.to_numpy(), edges, color=color, lw=2, label=label, baseline=None)
     ax.axvline(0, color=INK2, lw=0.8)
     end = 300 if duration == "5m" else 900
     ax.set_xlim(-60, end)
@@ -1042,7 +1048,7 @@ def chart_copy(tab: pd.DataFrame, period: str, path: Path, est: str = "first") -
     series = [
         (("hors_echantillon", 10, 1), BLUE, "leaders hors échantillon : top 10 de l'heure précédente"),
         (("hors_echantillon", 10, 6), ORANGE, "leaders hors échantillon : top 10 des 6 h précédentes"),
-        (("temoin_autres_wallets", 0, 1), AQUA, "témoin : achats de tous les autres wallets"),
+        (("temoin_autres_wallets", 0, 1), AQUA, "témoin : achats des wallets hors top 20 de l'heure précédente"),
         (("in_sample_fuite", 10, 0), YELLOW, "top 10 de l'heure même (in-sample, avec fuite)"),
     ]
     ymin, ymax = 0.0, 0.0
@@ -1099,7 +1105,7 @@ def chart_copy_variants(tab: pd.DataFrame, period: str, path: Path, delay: int =
     for L in LOOKBACKS:
         for K in KS:
             rows.append((f"top {K}, classement sur {L} h", _cells(tab, "hors_echantillon", K, L, est), BLUE))
-    rows.append(("témoin : tous les autres wallets", _cells(tab, "temoin_autres_wallets", 0, 1, est), AQUA))
+    rows.append(("témoin : wallets hors top 20", _cells(tab, "temoin_autres_wallets", 0, 1, est), AQUA))
     rows.append(("top 10 de l'heure même (in-sample)", _cells(tab, "in_sample_fuite", 10, 0, est), YELLOW))
     fig, ax = new_fig(8.0, 4.8)
     ax.grid(axis="y", visible=False)
@@ -1110,7 +1116,9 @@ def chart_copy_variants(tab: pd.DataFrame, period: str, path: Path, delay: int =
         ax.plot([r["pnl_lo"], r["pnl_hi"]], [y, y], color=color, lw=2, solid_capstyle="round")
         ax.plot([r["pnl_bonf_lo"], r["pnl_bonf_hi"]], [y, y], color=color, lw=0.8, alpha=0.7)
         ax.plot(r["pnl_per_share"], y, "o", color=color, ms=7, mec=BG, mew=1.5)
-        ax.text(max(r["pnl_hi"], r["pnl_bonf_hi"]) + 0.002, y, f"{r['pnl_per_share'] * 100:+.1f} c  (n = {fnum(r['n_filled'])})".replace(".", ",").replace("-", "−"),
+        # label to the right of both intervals and of the zero line (no overlap with the axvline)
+        x_lab = max(r["pnl_hi"], r["pnl_bonf_hi"], 0.0) + 0.003
+        ax.text(x_lab, y, f"{r['pnl_per_share'] * 100:+.1f} c  (n = {fnum(r['n_filled'])})".replace(".", ",").replace("-", "−"),
                 va="center", ha="left", fontsize=7.8, color=INK)
     ax.axvline(0, color=INK2, lw=0.8)
     ax.set_yticks(range(len(rows)))
@@ -1121,9 +1129,11 @@ def chart_copy_variants(tab: pd.DataFrame, period: str, path: Path, delay: int =
     ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: (f"{v * 100:+.0f} c" if abs(v) > 1e-9 else "0 c")))
     ax.set_xlabel(f"P&L moyen par part copiée à d = {delay} s (cents, frais preneur inclus)")
     z = tab.attrs.get("z_bonf", float("nan"))
-    note = (f"{SOURCE} ; {period} ; évaluation à partir de la 7e heure.\n"
+    z_str = f"{z:.2f}".replace(".", ",")
+    note =(f"{SOURCE} ; {period} ; évaluation à partir de la 7e heure.\n"
             f"Trait épais : IC 95 % (bootstrap des créneaux de 15 min) ; trait fin : IC corrigé de Bonferroni pour les "
-            f"{tab.attrs.get('n_cells', 108)} cellules K × fenêtre × délai × estimateur (± {z:.2f} erreurs-types).")
+            f"{tab.attrs.get('n_cells', 162)} cellules K × fenêtre × délai × estimateur (± {z_str} erreurs-types). "
+            "Témoin : wallets hors du top 20 de l'heure précédente.")
     finish(fig, ax, f"À {delay} s de délai, aucune variante hors échantillon n'est rentable", note, path, legend=False)
 
 
