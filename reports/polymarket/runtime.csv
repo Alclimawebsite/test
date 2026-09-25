@@ -1,0 +1,9 @@
+étape,secondes
+1. liste des marchés (client.list_updown_markets),5.647725117999471
+2. eventMetadata (priceToBeat / finalPrice),4.355420718999994
+3. historique de prix du jeton Up (8063 marchés),133.88661399800003
+4. klines Binance 1m + 1s (zips journaliers),8.174597965999965
+5. variables et analyses,4.087136752000333
+5b. transactions preneuses autour de S (600 marchés),67.80506442099977
+6. écriture des CSV et du rapport,0.8001435249998394
+total,225.0058973639998
