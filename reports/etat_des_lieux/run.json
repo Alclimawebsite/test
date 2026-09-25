@@ -1,0 +1,39 @@
+{
+  "command": "python -m tradebot study --tickers BTCUSDT SOLUSDT --days 30",
+  "generated_at": "2026-09-25 22:54 UTC",
+  "params": {
+    "tickers": [
+      "BTCUSDT",
+      "SOLUSDT"
+    ],
+    "interval": "1m",
+    "days": 30,
+    "horizons": [
+      5,
+      10,
+      15
+    ],
+    "train_frac": 0.6,
+    "combined": true,
+    "n_splits": 5,
+    "row_step": 5,
+    "max_train_rows": 100000
+  },
+  "split_times": {
+    "BTCUSDT": "2026-09-13 22:53:00+00:00",
+    "SOLUSDT": "2026-09-13 22:54:00+00:00"
+  },
+  "git": {
+    "commit": "9892f5a",
+    "dirty": true
+  },
+  "versions": {
+    "python": "3.11.15",
+    "tradebot": "0.1.0",
+    "numpy": "2.4.6",
+    "pandas": "3.0.6",
+    "scipy": "1.17.1",
+    "sklearn": "1.9.1"
+  },
+  "total_seconds": 67.4
+}

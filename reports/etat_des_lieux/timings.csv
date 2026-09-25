@@ -1,0 +1,19 @@
+ticker,step,seconds
+BTCUSDT,chargement,2.082
+BTCUSDT,référence de marché,0.0
+BTCUSDT,indicateurs,0.574
+BTCUSDT,cibles,0.015
+BTCUSDT,scores des indicateurs,4.121
+BTCUSDT,modèle combiné logit,17.645
+BTCUSDT,modèle combiné hgb,5.422
+BTCUSDT,baselines (mêmes barres),0.254
+SOLUSDT,chargement,0.775
+SOLUSDT,référence de marché,0.0
+SOLUSDT,indicateurs,0.744
+SOLUSDT,cibles,0.014
+SOLUSDT,scores des indicateurs,4.621
+SOLUSDT,modèle combiné logit,22.709
+SOLUSDT,modèle combiné hgb,5.998
+SOLUSDT,baselines (mêmes barres),0.18
+,agrégat et rapport,1.795
+,total,67.403

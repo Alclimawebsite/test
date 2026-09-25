@@ -1,0 +1,6 @@
+ticker,step,seconds
+SOLUSDT,chargement,3.13
+SOLUSDT,covariables,1.866
+,chargement TimesFM,4.383
+SOLUSDT,walk-forward TimesFM,28.9
+SOLUSDT,baselines et métriques,0.886
