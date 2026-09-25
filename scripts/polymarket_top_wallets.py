@@ -442,6 +442,7 @@ def q2_profile(a: dict, hourly: pd.DataFrame, is_rank: np.ndarray, pnl: pd.DataF
     hr = hourly.copy()
     hr["top10"] = hr["rank_pnl"] <= 10
     prof = []
+    btc5 = (a["asset"] == "btc") & (dur == "5m")
     for name, g, hg in (("top10_heure", top, hr["top10"]), ("autres", ~top, ~hr["top10"])):
         buy = g & a["buy"]
         bp = a["price"][buy]
@@ -476,6 +477,9 @@ def q2_profile(a: dict, hourly: pd.DataFrame, is_rank: np.ndarray, pnl: pd.DataF
             "share_fills_first_10s": float(((t_rel[g] >= 0) & (t_rel[g] < 10)).mean()),
             "share_fills_first_60s": float(((t_rel[g] >= 0) & (t_rel[g] < 60)).mean()),
             "share_fills_last_60s": float((a["E"][g] - a["ts"][g] <= 60).mean()),
+            "taker_fills_share_5_40s": float(((t_rel[g & a["taker"]] >= 5) & (t_rel[g & a["taker"]] < 40)).mean()),
+            "taker_fills_share_first_60s": float(((t_rel[g & a["taker"]] >= 0) & (t_rel[g & a["taker"]] < 60)).mean()),
+            "taker_fills_share_5_40s_btc_5m": float(((t_rel[g & a["taker"] & btc5] >= 5) & (t_rel[g & a["taker"] & btc5] < 40)).mean()),
             "t_rel_median_s_5m": float(np.median(t_rel[g & (dur == "5m")])),
             "t_rel_median_s_15m": float(np.median(t_rel[g & (dur == "15m")])),
             "volume_share_btc": float(vol[a["asset"][g] == "btc"].sum() / vol.sum()),
@@ -521,12 +525,12 @@ def q2_profile(a: dict, hourly: pd.DataFrame, is_rank: np.ndarray, pnl: pd.DataF
     top20.insert(0, "rank_48h", np.arange(1, len(top20) + 1))
 
     # markets per wallet-hour distribution (bots?)
-    bins = [0, 1, 2, 5, 10, 24, 36, 49]
+    bins = [1, 2, 3, 6, 11, 25, 37, 49]      # integer ranges 1, 2, 3-5, 6-10, 11-24, 25-36, 37-48 (48 markets per hour)
     mk = []
     for name, hg in (("top10_heure", hr["top10"]), ("autres", ~hr["top10"])):
         cnt, _ = np.histogram(hr.loc[hg, "n_markets"], bins=bins)
         for lo, hi_, n in zip(bins[:-1], bins[1:], cnt):
-            mk.append({"group": name, "n_markets_from": lo + 1 if lo else 1, "n_markets_to": hi_, "n_wallet_hours": int(n),
+            mk.append({"group": name, "n_markets_from": lo, "n_markets_to": hi_ - 1, "n_wallet_hours": int(n),
                        "share": n / hg.sum()})
     return {"timing_zoom": timing_zoom, "timing_window": timing_window, "profile": profile, "top20_48h": top20,
             "markets_per_hour": pd.DataFrame(mk)}
@@ -727,7 +731,36 @@ def q4_copy(ev: pd.DataFrame, fills: dict, ranks: dict[int, np.ndarray], is_rank
     tab = pd.DataFrame(rows)
     tab.attrs["z_bonf"] = z_bonf
     tab.attrs["n_cells"] = n_cells
-    return tab, pd.DataFrame()
+
+    # breakdown of the main cell (top 10, 1 h lookback) by market, leader role, price and timing
+    main = groups[[g[:3] for g in groups].index(("hors_echantillon", 10, 1))][3]
+    t_rel = ev["ts"].to_numpy() - ev["S"].to_numpy()
+    to_end = ev["E"].to_numpy() - ev["ts"].to_numpy()
+    lpx = ev["leader_price"].to_numpy()
+    role_t = ev["taker_size"].to_numpy() / size > 0.5
+    splits = {
+        "actif": ev["asset"].to_numpy(), "duree": ev["duration"].to_numpy(),
+        "role_du_leader": np.where(role_t, "preneur", "maker"),
+        "prix_du_leader": np.select([lpx < 0.3, lpx <= 0.7], ["< 0,30", "0,30–0,70"], "> 0,70"),
+        "moment": np.select([t_rel < 0, t_rel < 60, to_end > 60], ["avant S", "S à S+60 s", "milieu"], "dernière minute"),
+    }
+    det = []
+    for d in (0, 3, 10):
+        f = fills[d]
+        for dim, lab in splits.items():
+            for v in sorted(set(lab[main])):
+                ok = main & f["ok"] & (lab == v)
+                if ok.sum() < 30:
+                    continue
+                p = f["first"][ok]
+                pnl_s = won[ok] - p - fee_per_share(p)
+                b = cluster_boot(pnl_s, np.ones(len(p)), slot[ok], n_boot=n_boot, seed=40 + d)
+                lo_ = cluster_boot(ev["leader_pnl_share"].to_numpy()[ok], np.ones(ok.sum()), slot[ok], n_boot=n_boot, seed=41)
+                det.append({"K": 10, "lookback_h": 1, "delay_s": d, "dimension": dim, "value": v, "n_filled": int(ok.sum()),
+                            "share_of_events": float(ok.sum() / (main & f["ok"]).sum()), "mean_price": float(p.mean()),
+                            "win_rate": float(won[ok].mean()), "pnl_per_share": b["est"], "pnl_lo": b["lo"], "pnl_hi": b["hi"],
+                            "leader_own_pnl_per_share": lo_["est"], "leader_own_lo": lo_["lo"], "leader_own_hi": lo_["hi"]})
+    return tab, pd.DataFrame(det)
 
 
 def q4_leaders_hourly(pm_: np.ndarray, act: np.ndarray, vol: np.ndarray, ranks: dict[int, np.ndarray], n_boot: int) -> pd.DataFrame:
@@ -949,8 +982,8 @@ def chart_timing_window(tw: pd.DataFrame, duration: str, period: str, path: Path
     note = (f"{SOURCE} ; {period}.\n"
             f"Marchés {duration} seulement ; exécutions de S−60 s à la fin de la fenêtre : top 10 de l'heure n = {fnum(n_top)}, "
             f"autres n = {fnum(n_oth)}.")
-    title = {"5m": "5 min : même rythme de trading sur toute la fenêtre",
-             "15m": "15 min : même rythme de trading sur toute la fenêtre"}[duration]
+    title = {"5m": "5 min : profils quasi identiques, l'activité retombe dans les 50 dernières secondes",
+             "15m": "15 min : profils proches, pics à l'ouverture et dans les 5 dernières minutes"}[duration]
     finish(fig, ax, title, note, path, legend_kw={"loc": "lower left", "bbox_to_anchor": (0.0, 1.0), "ncol": 2})
 
 
@@ -1205,8 +1238,13 @@ def main(argv=None) -> int:
     tape = build_tape(a, t_origin)
     ev = copy_events(a)
     fills = simulate_fills(ev, tape, t_origin)
-    tab, _ = q4_copy(ev, fills, ranks, is_rank, int(t_start.timestamp()), n_hours, args.boot)
+    cond_asset = pd.Series(a["asset"]).groupby(a["cond"]).first()
+    cond_dur = pd.Series(a["duration"]).groupby(a["cond"]).first()
+    ev["asset"] = cond_asset.reindex(ev["cond"]).to_numpy()
+    ev["duration"] = cond_dur.reindex(ev["cond"]).to_numpy()
+    tab, detail = q4_copy(ev, fills, ranks, is_rank, int(t_start.timestamp()), n_hours, args.boot)
     tab.to_csv(out / "copy_trading.csv", index=False)
+    detail.to_csv(out / "copy_trading_detail_top10_1h.csv", index=False)
     lh = q4_leaders_hourly(pm_, act, vol, ranks, args.boot)
     lh.to_csv(out / "copy_leaders_pnl_horaire.csv", index=False)
     chart_copy(tab, period, out / "copy_pnl_delai.png")
