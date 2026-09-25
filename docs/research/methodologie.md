@@ -69,7 +69,7 @@ exprimées en **points de base** (1 pb = 0,01 %).
 9. **La puissance a un prix.** Détecter 52 % (puissance 80 %, α = 5 % unilatéral) demande
    **3 865 trades non chevauchants**, soit 40 jours de barres à 15 min. Détecter 51 % en demande 15 457,
    soit 161 jours. Un backtest TimesFM de 290 origines non chevauchantes ne détecte rien sous 57 % environ (§ 5).
-10. **Il existe un piège réel dans les métriques dérivés Binance.** Dans les fichiers `metrics`, le
+10. **Il existe un piège réel dans les métriques des dérivés Binance.** Dans les fichiers `metrics`, le
     `sum_taker_long_short_vol_ratio` horodaté `T` couvre la fenêtre **[T, T+5 min)** (corrélation 1,00
     avec le flux taker de cette fenêtre, contre 0,13 pour [T−5, T)). Aligné sans décalage, il donne un
     **hit-rate illusoire de 72,5 % et un IC de 0,63** à 5 min. Avec le décalage prudent de +5 min du
