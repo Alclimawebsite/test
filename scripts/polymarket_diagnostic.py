@@ -94,6 +94,8 @@ PROXIES = [
      "bn_vwap60_E", "bn_vwap60_S"),
     ("b_twap30_1s", "1s", "(contrôle) TWAP 30 s (1s) fin ≥ début — pour vérifier la fenêtre de 60 s",
      "bn_twap30_E", "bn_twap30_S"),
+    ("x_twap60_1s_lag4", "1s", "(exploratoire) TWAP60 1s décalé de 4 s : moyenne sur (t−64, t−4] — décalage choisi sur ces données",
+     "bn_twap60m4_E", "bn_twap60m4_S"),
     ("c_window_twap_vs_open_1m", "1m", "(c) moyenne des closes 1m de toute la fenêtre ≥ open 1m au début",
      "bn_win1m", "bn_open1m_S"),
     ("c_window_twap_vs_open_1s", "1s", "(c) moyenne des closes 1s de toute la fenêtre ≥ open 1s au début",
@@ -513,6 +515,7 @@ def binance_features(g: pd.DataFrame, b1s: Bars, b1m: Bars, dur_s: int) -> pd.Da
         f[f"bn_twap60_{tag}"] = b1s.mean("close", T - 60, 60)     # closes des bougies [T−60, T) = prix sur (T−60, T]
         f[f"bn_vwap60_{tag}"] = b1s.vwap(T - 60, 60)
         f[f"bn_twap30_{tag}"] = b1s.mean("close", T - 30, 30)
+        f[f"bn_twap60m4_{tag}"] = b1s.mean("close", T - 64, 60)
     f["bn_first60_S"] = b1s.mean("close", S, 60)
     # -- niveaux candidats à S et E pour la comparaison avec Chainlink
     for tag, T in (("S", S), ("E", E)):
@@ -617,7 +620,8 @@ def proxy_agreement(D: pd.DataFrame) -> pd.DataFrame:
             n, k = len(y), int((pred == y).sum())
             lo, hi = wilson(k, n)
             mv = np.abs(g["cl_move_bps"].to_numpy()[ok])
-            dis = mv[pred != y]
+            dis = mv[(pred != y)]
+            dis, mv = dis[np.isfinite(dis)], mv[np.isfinite(mv)]
             rows.append({
                 "cellule": name, "proxy": pname, "résolution": res, "n": n, "accord": k / n if n else math.nan,
                 "ic95_bas": lo, "ic95_haut": hi, "désaccords": n - k,
@@ -761,6 +765,48 @@ def nowcast_vs_market(D: pd.DataFrame) -> pd.DataFrame:
                 "auc_marché": auc_hanley(y, pmk)[0], "auc_nowcast": auc_hanley(y, pn)[0],
                 "corr_marché_nowcast": float(np.corrcoef(pmk, pn)[0, 1]),
             })
+    return pd.DataFrame(rows)
+
+
+NOWCAST_LAGS = (0, 10, 20, 30, 45, 60)
+
+
+def nowcast_lag_table(D: pd.DataFrame, bars1s: dict[str, Bars]) -> pd.DataFrame:
+    """Robustesse : nowcast calculé Δ secondes AVANT l'horodatage du point de marché.
+
+    Si le point ``prices-history`` reflétait un état antérieur à son horodatage (agrégation par
+    minute), le nowcast décalé devrait rejoindre le marché (ΔBrier -> 0, corrélation maximale).
+    Mêmes marchés pour tous les Δ (lignes valides pour chaque décalage).
+    """
+    rows = []
+    for dur in D["duration"].unique():
+        for k in HORIZONS_MIN[dur]:
+            if k < 2:
+                continue   # à S+1 min, τ − 60 s tombe souvent avant S
+            per_lag = {lag: [] for lag in NOWCAST_LAGS}
+            pm_all, y_all, cl_all = [], [], []
+            for asset, g in D[D["duration"] == dur].groupby("asset", sort=False):
+                S, E = g["start_ts"].to_numpy(), g["end_ts"].to_numpy()
+                tau = g[f"t_{k}m"].to_numpy(dtype=float)
+                for lag in NOWCAST_LAGS:
+                    per_lag[lag].append(nowcast(bars1s[asset], S, E, tau - lag, g["bn_twap60_S"].to_numpy(),
+                                                g["sigma_s"].to_numpy()))
+                pm_all.append(g[f"p_{k}m"].to_numpy(dtype=float))
+                y_all.append(g["y"].to_numpy(dtype=float))
+                cl_all.append(S // 900)
+            pmk, y, cl = np.concatenate(pm_all), np.concatenate(y_all), np.concatenate(cl_all)
+            pns = {lag: np.concatenate(v) for lag, v in per_lag.items()}
+            ok = np.isfinite(pmk) & np.isfinite(y)
+            for v in pns.values():
+                ok &= np.isfinite(v)
+            for lag, pn in pns.items():
+                d = (pn[ok] - y[ok]) ** 2 - (pmk[ok] - y[ok]) ** 2
+                m, lo, hi = cluster_mean_ci(d, cl[ok])
+                rows.append({"durée": dur, "instant": f"S+{k} min", "décalage_s": lag, "n": int(ok.sum()),
+                             "brier_nowcast": float(np.mean((pn[ok] - y[ok]) ** 2)),
+                             "brier_marché": float(np.mean((pmk[ok] - y[ok]) ** 2)),
+                             "delta_brier": m, "delta_brier_ic_bas": lo, "delta_brier_ic_haut": hi,
+                             "corr_marché_nowcast": float(np.corrcoef(pmk[ok], pn[ok])[0, 1])})
     return pd.DataFrame(rows)
 
 
@@ -1008,7 +1054,11 @@ def write_report(ctx: dict, out_dir: Path) -> Path:
     a_all = br_all.loc["Tous"]
     w(f"* **{fr(n_res)} marchés résolus** analysés ({fr(int(a_all['créneaux attendus']))} créneaux attendus). "
       f"Taux de « Up » global : **{pct(a_all['taux_up'])}** (IC 95 % {pct(a_all['ic95_bas'])} – {pct(a_all['ic95_haut'])}). "
-      f"Égalités Chainlink (`finalPrice == priceToBeat`) : **{fr(int(a_all['égalités_chainlink']))}**.")
+      f"Égalités Chainlink (`finalPrice == priceToBeat`) : **{fr(int(a_all['égalités_chainlink']))}**."
+      + (lambda r: f" IC robuste (créneaux de 15 min, actifs corrélés) : {pct(r['ic95_cluster_bas'])} – "
+                   f"{pct(r['ic95_cluster_haut'])}"
+                   + (" : pas de biais haussier démontré." if r["ic95_cluster_bas"] <= 0.5 else " : léger biais haussier.")
+         )(bl[(bl["cellule"] == "Tous") & (bl["stratégie"] == "always_up")].iloc[0]))
     w(f"* Contrôle de la règle : l'issue officielle est égale à `finalPrice >= priceToBeat` dans "
       f"{fr(checks['rule_ok'])} / {fr(checks['rule_n'])} cas, et le `finalPrice` d'une fenêtre est égal au "
       f"`priceToBeat` de la suivante dans {fr(checks['chain_ok'])} / {fr(checks['chain_n'])} cas. "
@@ -1020,7 +1070,12 @@ def write_report(ctx: dict, out_dir: Path) -> Path:
     w(f"* **Meilleur proxy Binance** : `{best_proxy}` ({bp['description']}) : accord de **{pct(bp['accord'])}** "
       f"(IC {pct(bp['ic95_bas'])} – {pct(bp['ic95_haut'])}, n = {fr(int(bp['n']))}). "
       f"Avec des bougies 1m seulement : `{best_1m}`, **{pct(b1['accord'])}**. La comparaison close/open 1m "
-      f"(a) n'atteint que {pct(a_['accord'])}.")
+      f"(a) n'atteint que {pct(a_['accord'])}."
+      + (f" Exploratoire : en décalant la fenêtre Binance de 4 s vers le passé, l'erreur sur la variation baisse "
+         f"(RMSE {fr(lag[lag['décalage_s'] == -4]['rmse_variation_pb'].mean(), 2)} pb contre "
+         f"{fr(lag[lag['décalage_s'] == 0]['rmse_variation_pb'].mean(), 2)} pb) et l'accord passe à "
+         f"{pct(tot.loc['x_twap60_1s_lag4', 'accord'])}. Le flux Chainlink semble donc en retard d'environ 4 s sur Binance "
+         "(décalage choisi sur ces données)." if "x_twap60_1s_lag4" in tot.index and len(lag) else ""))
     pre = mp[(mp["cellule"] == "Tous") & (mp["instant"].str.startswith("S−30"))]
     if len(pre):
         r = pre.iloc[0]
@@ -1035,6 +1090,33 @@ def write_report(ctx: dict, out_dir: Path) -> Path:
         parts = [f"{r['cellule'].replace('Tous ', '')} {r['instant']} : {pct(r['accuracy'])} (Brier {fr(r['brier'], 3)})"
                  for _, r in conv.iterrows()]
         w("* **Une fois la fenêtre ouverte, le prix converge vite** (justesse du signe p ≥ 0,5) : " + " ; ".join(parts) + ".")
+    nl = ctx.get("nowcast_lag")
+    n1 = nv[(nv["cellule"] == "Tous") & (nv["instant"] == "S+1 min")] if len(nv) else nv
+    if len(n1) and nl is not None and len(nl):
+        r1 = n1.iloc[0]
+        z = nl[(nl["durée"] == ctx["durations"][0]) & (nl["instant"] == "S+2 min")]
+        txt = (f"* **Nowcast Binance contre prix du marché au même horodatage** : le nowcast sans paramètre fait mieux que le "
+               f"point `prices-history` (S+1 min, toutes cellules : justesse {pct(r1['acc_nowcast'])} contre "
+               f"{pct(r1['acc_marché'])}, ΔBrier {fr(r1['delta_brier'], 4)}, IC {fr(r1['delta_brier_ic_bas'], 4)} ; "
+               f"{fr(r1['delta_brier_ic_haut'], 4)}).")
+        if len(z):
+            zb = z.loc[z["corr_marché_nowcast"].idxmax()]
+            z0 = z[z["décalage_s"] == 0].iloc[0]
+            txt += (f" Sur le {ctx['durations'][0]} à S+2 min, la corrélation avec le marché est maximale quand le nowcast est "
+                    f"calculé {int(zb['décalage_s'])} s avant l'horodatage du point ({fr(zb['corr_marché_nowcast'], 3)} contre "
+                    f"{fr(z0['corr_marché_nowcast'], 3)} à 0 s). ")
+            if zb["décalage_s"] > 0:
+                zd = zb["delta_brier"]
+                txt += (f"À ce décalage, ΔBrier vaut {fr(zd, 4)} (IC {fr(zb['delta_brier_ic_bas'], 4)} ; "
+                        f"{fr(zb['delta_brier_ic_haut'], 4)}). L'avance du nowcast équivaut donc à environ "
+                        f"{int(zb['décalage_s'])} s d'information. Deux explications sont possibles, et on ne peut pas "
+                        "les départager ici : (i) le point `prices-history` reflète un état du carnet plus ancien que son "
+                        "horodatage ; (ii) le milieu de fourchette réagit avec ce retard sur Binance. Seul un enregistrement "
+                        "du carnet en direct (WebSocket) permettrait de trancher. Même dans le cas (ii), il faudrait payer "
+                        "l'ask réel, et le § 6 bis montre que le côté informé se paie vite.")
+            else:
+                txt += "Aucun retard apparent du point : l'avance du nowcast est à confirmer avec le carnet enregistré en direct."
+        w(txt)
     bs = bl[(bl["cellule"] == "Tous") & (bl["stratégie"] == best_strat)].iloc[0]
     w(f"* **Meilleure baseline pré-ouverture « propre »** (information ≤ S−30 s, choisie in-sample) : "
       f"`{best_strat}`, justesse {pct(bs['accuracy'])} (IC robuste {pct(bs['ic95_cluster_bas'])} – "
@@ -1062,6 +1144,16 @@ def write_report(ctx: dict, out_dir: Path) -> Path:
           + ("L'IC contient zéro : **non significatif**. " if r["ic95_bas"] <= 0 <= r["ic95_haut"] else
              ("L'IC exclut zéro. " if r["ic95_bas"] > 0 else "L'IC est entièrement négatif. "))
           + "Résultat **in-sample** : la stratégie a été choisie sur ces mêmes données.")
+    ex0 = ctx.get("exec")
+    if ex0 is not None and len(ex0):
+        e = ex0[(ex0["stratégie"] == best_strat) & (ex0["fenêtre_exécution"] == "pre30") & (ex0["cellule"] == "Tous")]
+        if len(e):
+            e = e.iloc[0]
+            w(f"* **Hypothèse d'exécution** : dans [S−30 s, S), les preneurs du côté choisi par `{best_strat}` ont réellement "
+              f"payé {fr(e['prix_payé_moyen'], 3)} en moyenne, contre {fr(e['ask_supposé_moyen'], 3)} supposé (milieu + 0,005). "
+              f"L'hypothèse est donc optimiste d'environ {fr(100 * (e['prix_payé_moyen'] - e['ask_supposé_moyen']), 1)} c par part. "
+              f"Au prix payé, le P&L est de {fr(100 * e['pnl_par_part_prix_payé'], 2)} c par part (IC {fr(100 * e['ic95_bas'], 2)} – "
+              f"{fr(100 * e['ic95_haut'], 2)} c, n = {fr(int(e['n_avec_transaction']))}).")
     oos = pnl_best[(pnl_best["échantillon"].str.startswith("2e moitié")) & (pnl_best["cellule"] == "Tous")]
     if len(oos):
         r = oos.iloc[0]
@@ -1086,7 +1178,7 @@ def write_report(ctx: dict, out_dir: Path) -> Path:
     w("* **Causalité des baselines** : trois coupures d'information. `S−60s (1m)` = bougies 1m closes au plus tard à S−60 s ; "
       "`S−30s (1s)` = bougies 1s closes au plus tard à S−30 s ; `S (…) *` = bougies closes au plus tard à S. Seules les deux "
       "premières sont comparables au prix du marché pris à S−30 s, et elles seules servent au P&L. Dans les 30 s qui "
-      "précèdent l'ouverture, les preneurs font déjà bouger le prix (transactions observées entre 0,36 et 0,56).")
+      "précèdent l'ouverture, les preneurs font déjà bouger le prix (§ 6 bis).")
     w("* **Intervalles** : Wilson à 95 % par cellule. « IC robuste » = IC d'une moyenne en groupant par créneau de 15 min, "
       "car BTC, ETH et SOL, ainsi que les marchés 5m et 15m d'un même créneau, sont corrélés. Les AUC ont un IC de Hanley-McNeil.")
     w("")
@@ -1099,6 +1191,7 @@ def write_report(ctx: dict, out_dir: Path) -> Path:
         ("priceToBeat 5m == priceToBeat 15m au même début", f"{fr(checks['same_ptb_ok'])} / {fr(checks['same_ptb_n'])}"),
         ("règle de résolution (client) / fenêtre TWAP", checks["rules"]),
         ("barème de frais (fee_type, rate, exposant)", checks["fees"]),
+        ("marchés résolus sans `finalPrice` (exclus des comparaisons Chainlink)", checks["no_final"]),
         ("marchés sans historique de prix / erreurs", f"{fr(checks['no_history'])} / {fr(checks['errors'])}"),
         ("marchés avec prix à S−30 s", f"{fr(checks['with_pre'])}"),
         ("ancienneté médiane du point S−30 s (s)", fr(checks["pre_age_median"], 0)),
@@ -1208,6 +1301,29 @@ def write_report(ctx: dict, out_dir: Path) -> Path:
           "pas un prix exécutable. Un nowcast meilleur que le marché au même instant ne prouve donc pas qu'un gain "
           "soit exploitable.*")
         w("")
+        nl = ctx.get("nowcast_lag")
+        if nl is not None and len(nl):
+            w("**Robustesse : le point `prices-history` est-il en retard sur son horodatage ?** On recalcule le nowcast "
+              "Δ secondes AVANT l'horodatage du point, sur les mêmes marchés. Si le nowcast décalé rejoint le marché "
+              "(ΔBrier ≈ 0, corrélation maximale), le point reflète un état antérieur à son horodatage, et l'avance du "
+              "nowcast vient de là, pas d'une inefficience.")
+            w("")
+            t = nl.copy()
+            t["ΔBrier (IC)"] = t.apply(lambda r: f"{fr(r['delta_brier'], 4)} ({fr(r['delta_brier_ic_bas'], 4)} ; "
+                                                f"{fr(r['delta_brier_ic_haut'], 4)})", axis=1)
+            t["cellule"] = t["durée"] + " " + t["instant"]
+            t["décalage_s"] = t["décalage_s"].astype(int).astype(str)
+            piv_d = t.pivot_table(index="décalage_s", columns="cellule", values="ΔBrier (IC)", aggfunc="first", sort=False)
+            piv_c = t.pivot_table(index="décalage_s", columns="cellule", values="corr_marché_nowcast", aggfunc="first", sort=False)
+            w("ΔBrier (nowcast décalé − marché), IC robuste :")
+            w("")
+            w(md_table(piv_d.reset_index().rename(columns={"décalage_s": "Δ (s)"})))
+            w("")
+            w("Corrélation marché / nowcast décalé :")
+            w("")
+            w(md_table(piv_c.reset_index().rename(columns={"décalage_s": "Δ (s)"}),
+                       {c: (lambda x: fr(x, 3)) for c in piv_c.columns}))
+            w("")
     # ---------------------------------------------------------------- 4. baselines
     w("## 5. Baselines Binance calculées AVANT l'ouverture")
     w("")
@@ -1275,7 +1391,9 @@ def write_report(ctx: dict, out_dir: Path) -> Path:
     w("")
     w(f"1. **Étiquette** : utiliser `{best_proxy}` (klines 1s), soit {pct(bp['accord'])} d'accord. Si l'on n'a que du 1m : "
       f"`{best_1m}` ({pct(b1['accord'])}). Il ne faut PAS utiliser close[t+h]/close[t], qui ne donne que "
-      f"{pct(tot.loc['a2_close_vs_close_1m', 'accord'])} d'accord : c'est le label `r_h` actuel de `targets.py`.")
+      f"{pct(tot.loc['a2_close_vs_close_1m', 'accord'])} d'accord : c'est le label `r_h` actuel de `targets.py`."
+      + (f" Variante exploratoire : fenêtre décalée de 4 s, soit {pct(tot.loc['x_twap60_1s_lag4', 'accord'])}, à valider "
+         "sur une autre période." if "x_twap60_1s_lag4" in tot.index else ""))
     w("2. **Origine** : l'origine d'une prévision est le début de fenêtre S (multiple de 300 ou 900 s en UTC). La référence "
       "est TWAP60(S), une moyenne sur (S−60 s, S] : elle est fixée à S et en partie connue dès S−30 s.")
     pre_all = mp[(mp["cellule"] == "Tous") & mp["instant"].str.startswith("S−30")]
@@ -1309,6 +1427,9 @@ def write_report(ctx: dict, out_dir: Path) -> Path:
     w("")
     # ---------------------------------------------------------------- runtime
     w("## 9. Temps d'exécution")
+    w("")
+    w("Caches disque **désactivés** (`--no-cache`) : exécution à froid, toutes les données ont été retéléchargées." if not ctx["use_cache"]
+      else "Caches disque activés (`data/cache/polymarket`, `data/cache/diag`) : une exécution à froid est bien plus longue.")
     w("")
     w(md_table(rt, {"secondes": lambda x: fr(x, 1)}))
     w("")
@@ -1376,6 +1497,21 @@ def main(argv=None) -> int:
                 log.info("   %s %s : %d / %d marchés", a, d, len(by_cell[(a, d)]), expected[(a, d)])
     markets = [m for v in by_cell.values() for m in v]
     fee_by_slug = {m.slug: m.fee_schedule for m in markets}
+    found_slugs = {m.slug for m in markets}
+    missing_slugs = [pm.updown_slug(a, d, ts) for a in assets for d in durations
+                     for ts in pm.slot_starts(d, start, end) if pm.updown_slug(a, d, ts) not in found_slugs]
+    confirmed = []
+    for sl in missing_slugs[:20]:   # contre-vérification directe sur gamma (/events et /markets)
+        ev = client._get(f"{pm.GAMMA_URL}/events", {"slug": sl}) or []
+        mk = client._get(f"{pm.GAMMA_URL}/markets", {"slug": sl}) or []
+        if not ev and not mk:
+            confirmed.append(sl)
+    if missing_slugs:
+        missing_note = (f"Créneaux absents : {len(missing_slugs)} ({', '.join(missing_slugs[:20])}). Contre-vérification "
+                        f"directe sur gamma (`/events` et `/markets`) : {len(confirmed)} / {min(len(missing_slugs), 20)} "
+                        "sont bien inconnus de Polymarket. Ce n'est donc pas un bug du client.")
+    else:
+        missing_note = "Aucun créneau absent sur la période."
     mf = pm.markets_to_frame(markets)
 
     # 2. métadonnées Chainlink ------------------------------------------------
@@ -1444,6 +1580,8 @@ def main(argv=None) -> int:
         chk["rules"] = ", ".join(f"{r} / {fr(lb) if pd.notna(lb) else '—'} s : {fr(int(n))}" for (r, lb), n in rules.items())
         fees = D.groupby(["fee_type", "fee_rate", "fee_exponent"], dropna=False).size()
         chk["fees"] = ", ".join(f"{t} ({fr(r, 2)}, {fr(e, 0)}) : {fr(int(n))}" for (t, r, e), n in fees.items())
+        nofp = D[~np.isfinite(D["final_price"])]
+        chk["no_final"] = (f"{len(nofp)}" + (f" ({', '.join(sorted(nofp['slug']))})" if 0 < len(nofp) <= 8 else ""))
         chk["with_pre"] = int(np.isfinite(D["p_pre"]).sum())
         chk["pre_age_median"] = float(np.nanmedian(D["p_pre_age_s"]))
         chk["restricted"] = int(mf["restricted"].sum())
@@ -1455,14 +1593,16 @@ def main(argv=None) -> int:
         market, calib = market_power(D)
         D = D.join(nowcast_columns(D, bars1s))
         nv = nowcast_vs_market(D)
+        nv_lag = nowcast_lag_table(D, bars1s)
 
         preds = strategy_predictions(D)
         baselines = baseline_table(D, preds)
 
         # meilleurs proxies
         tot = proxy[proxy["cellule"] == "Tous"].set_index("proxy")
-        best_proxy = tot["accord"].idxmax()
-        best_proxy_1m = tot[tot["résolution"] == "1m"]["accord"].idxmax()
+        std = tot[~tot.index.str.startswith("x_")]          # hors proxies exploratoires
+        best_proxy = std["accord"].idxmax()
+        best_proxy_1m = std[std["résolution"] == "1m"]["accord"].idxmax()
 
         # meilleure baseline « propre » (in-sample, toutes cellules)
         feat_strats = [s for s, (c, _, _) in preds.items() if c in CLEAN_CUTOFFS]
@@ -1537,6 +1677,7 @@ def main(argv=None) -> int:
             ("market_price_power.csv", "pouvoir prédictif du prix du jeton Up (S−30 s, S, S+k min)"),
             ("calibration.csv", "calibration par déciles du prix du jeton Up"),
             ("nowcast_vs_market.csv", "marché contre nowcast Binance au même instant"),
+            ("nowcast_lag.csv", "robustesse : nowcast calculé 0 à 60 s avant l'horodatage du point de marché"),
             ("baselines.csv", "justesse des baselines pré-ouverture (toutes cellules)"),
             ("pnl.csv", "P&L théorique des baselines propres (in-sample) et détail de la meilleure (+ pseudo hors échantillon)"),
             ("runtime.csv", "temps d'exécution par étape"),
@@ -1558,6 +1699,7 @@ def main(argv=None) -> int:
         market.to_csv(out_dir / "market_price_power.csv", index=False)
         calib.to_csv(out_dir / "calibration.csv", index=False)
         nv.to_csv(out_dir / "nowcast_vs_market.csv", index=False)
+        nv_lag.to_csv(out_dir / "nowcast_lag.csv", index=False)
         baselines.to_csv(out_dir / "baselines.csv", index=False)
         pd.concat([pnl_all.assign(section="toutes_strategies"), pnl_best.assign(section="meilleure_baseline")],
                   ignore_index=True).to_csv(out_dir / "pnl.csv", index=False)
@@ -1568,8 +1710,17 @@ def main(argv=None) -> int:
             "bloquant, mais cela vaudrait un champ `price_to_beat` / `final_price` dans le client.",
             "`prices-history` renvoie un milieu de fourchette, environ un point par minute : ce n'est pas un prix "
             "exécutable. L'ask est approché par milieu + 0,005, ce qui correspond au carnet 0,50/0,51 observé avant l'ouverture.",
-            "`resolution_rule` ne distingue pas le TWAP-30 (5m, du 07/08 au 13/08/2026) du TWAP-60. Il faut regarder "
-            "`twap_lookback_s`. Sur la période étudiée, tous les marchés sont en TWAP-60 (voir les contrôles).",
+            "`resolution_rule` ne distingue pas le TWAP-30 du TWAP-60. Vérifié sur btc 5m : TWAP-30 du 07/08 au "
+            "13/08/2026 23:55 UTC (`btc-5m-twap-30`), TWAP-60 à partir du 14/08 00:00. La docstring du module annonce "
+            "« TWAP 60 s depuis le ~7 août » pour toutes les durées, ce qui est inexact pour le 5m. `twap_lookback_s` "
+            "est correct (30 ou 60) : c'est lui qu'il faut utiliser pour filtrer. Sur la période étudiée, tous les "
+            "marchés sont en TWAP-60 (voir les contrôles).",
+            missing_note,
+            f"Marchés résolus sans `finalPrice` dans `eventMetadata` : {chk['no_final']}. Ils sont exclus des "
+            "comparaisons de niveaux Chainlink, mais gardés pour l'issue officielle.",
+            "Les points `prices-history` sont en retard d'environ 10 s sur l'information Binance (voir la robustesse "
+            "du nowcast). Pour comparer un modèle au marché à la seconde près, il faut le carnet (`order_book`, "
+            "WebSocket) ou les transactions (`trades`), pas `prices_history`.",
             "Aucun bug bloquant trouvé : `list_updown_markets`, `prices_history`, `up_price_at`, `taker_fee` et "
             "`markets_to_frame` ont été utilisés tels quels, avec un contrôle croisé pour `up_price_at`.",
         ]
@@ -1581,7 +1732,8 @@ def main(argv=None) -> int:
             "days": args.days, "best_proxy": best_proxy, "best_proxy_1m": best_proxy_1m,
             "best_strategy": best_strategy, "missing_1s": ", ".join(f"{a.upper()} {m[0]}" for a, m in missing.items()),
             "client_notes": client_notes, "files_desc": files, "total_runtime": time.perf_counter() - t_all,
-            "exec": exec_df, "trades_sample": args.trades_sample, "n_sub": len(sub),
+            "exec": exec_df, "trades_sample": args.trades_sample, "n_sub": len(sub), "nowcast_lag": nv_lag,
+            "use_cache": use_cache,
         }
         write_report(ctx, out_dir)
     total = time.perf_counter() - t_all
