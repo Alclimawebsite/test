@@ -1,13 +1,17 @@
 {
-  "command": "python -m tradebot study --tickers BTCUSDT SOLUSDT --days 30",
-  "generated_at": "2026-09-25 22:54 UTC",
+  "command": "python -m tradebot study --days 365",
+  "generated_at": "2026-09-25 23:21 UTC",
   "params": {
     "tickers": [
       "BTCUSDT",
-      "SOLUSDT"
+      "SOLUSDT",
+      "ETHUSDT",
+      "XRPUSDT",
+      "BNBUSDT",
+      "DOGEUSDT"
     ],
     "interval": "1m",
-    "days": 30,
+    "days": 365,
     "horizons": [
       5,
       10,
@@ -20,11 +24,15 @@
     "max_train_rows": 100000
   },
   "split_times": {
-    "BTCUSDT": "2026-09-13 22:53:00+00:00",
-    "SOLUSDT": "2026-09-13 22:54:00+00:00"
+    "BTCUSDT": "2026-05-02 22:59:00+00:00",
+    "SOLUSDT": "2026-05-02 23:03:00+00:00",
+    "ETHUSDT": "2026-05-02 23:08:00+00:00",
+    "XRPUSDT": "2026-05-02 23:11:00+00:00",
+    "BNBUSDT": "2026-05-02 23:15:00+00:00",
+    "DOGEUSDT": "2026-05-02 23:18:00+00:00"
   },
   "git": {
-    "commit": "9892f5a",
+    "commit": "80ebb37",
     "dirty": true
   },
   "versions": {
@@ -35,5 +43,5 @@
     "scipy": "1.17.1",
     "sklearn": "1.9.1"
   },
-  "total_seconds": 67.4
+  "total_seconds": 1345.6
 }

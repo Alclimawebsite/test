@@ -1,19 +1,51 @@
 ticker,step,seconds
-BTCUSDT,chargement,2.082
+BTCUSDT,chargement,3.682
 BTCUSDT,référence de marché,0.0
-BTCUSDT,indicateurs,0.574
-BTCUSDT,cibles,0.015
-BTCUSDT,scores des indicateurs,4.121
-BTCUSDT,modèle combiné logit,17.645
-BTCUSDT,modèle combiné hgb,5.422
-BTCUSDT,baselines (mêmes barres),0.254
-SOLUSDT,chargement,0.775
+BTCUSDT,indicateurs,8.897
+BTCUSDT,cibles,0.087
+BTCUSDT,scores des indicateurs,67.763
+BTCUSDT,modèle combiné logit,89.493
+BTCUSDT,modèle combiné hgb,109.59
+BTCUSDT,baselines (mêmes barres),0.916
+SOLUSDT,chargement,2.041
 SOLUSDT,référence de marché,0.0
-SOLUSDT,indicateurs,0.744
-SOLUSDT,cibles,0.014
-SOLUSDT,scores des indicateurs,4.621
-SOLUSDT,modèle combiné logit,22.709
-SOLUSDT,modèle combiné hgb,5.998
-SOLUSDT,baselines (mêmes barres),0.18
-,agrégat et rapport,1.795
-,total,67.403
+SOLUSDT,indicateurs,7.669
+SOLUSDT,cibles,0.087
+SOLUSDT,scores des indicateurs,60.02
+SOLUSDT,modèle combiné logit,73.65
+SOLUSDT,modèle combiné hgb,150.208
+SOLUSDT,baselines (mêmes barres),0.8
+ETHUSDT,chargement,4.856
+ETHUSDT,référence de marché,0.0
+ETHUSDT,indicateurs,9.164
+ETHUSDT,cibles,0.088
+ETHUSDT,scores des indicateurs,52.874
+ETHUSDT,modèle combiné logit,66.689
+ETHUSDT,modèle combiné hgb,32.861
+ETHUSDT,baselines (mêmes barres),0.794
+XRPUSDT,chargement,3.001
+XRPUSDT,référence de marché,0.0
+XRPUSDT,indicateurs,8.867
+XRPUSDT,cibles,0.084
+XRPUSDT,scores des indicateurs,90.838
+XRPUSDT,modèle combiné logit,90.708
+XRPUSDT,modèle combiné hgb,43.925
+XRPUSDT,baselines (mêmes barres),0.728
+BNBUSDT,chargement,4.063
+BNBUSDT,référence de marché,0.0
+BNBUSDT,indicateurs,8.518
+BNBUSDT,cibles,0.093
+BNBUSDT,scores des indicateurs,54.536
+BNBUSDT,modèle combiné logit,75.464
+BNBUSDT,modèle combiné hgb,49.341
+BNBUSDT,baselines (mêmes barres),0.812
+DOGEUSDT,chargement,3.882
+DOGEUSDT,référence de marché,0.0
+DOGEUSDT,indicateurs,8.702
+DOGEUSDT,cibles,0.08
+DOGEUSDT,scores des indicateurs,58.648
+DOGEUSDT,modèle combiné logit,67.073
+DOGEUSDT,modèle combiné hgb,28.674
+DOGEUSDT,baselines (mêmes barres),0.749
+,agrégat et rapport,2.102
+,total,1345.624

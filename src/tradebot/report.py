@@ -806,9 +806,16 @@ def plot_excess_accuracy(metrics: pd.DataFrame, path: Path | str, *, models: Seq
         step = 0.12 * max(ymax, 1.0)
         placed: dict[int, list[float]] = {}
         V = np.array(allvals)
+        # une seule étiquette par horizon : le meilleur des modèles étiquetés (deux barres
+        # voisines de même hauteur produisaient des étiquettes superposées)
+        best_j: dict[int, int] = {}
+        for j, _xs, vals in pending:
+            for xi, v in enumerate(vals):
+                if np.isfinite(v) and (xi not in best_j or v > V[best_j[xi], xi]):
+                    best_j[xi] = j
         for j, xs, vals in pending:
             for xi, (x, v) in enumerate(zip(xs, vals)):
-                if not np.isfinite(v):
+                if not np.isfinite(v) or best_j.get(xi) != j:
                     continue
                 sgn = 1.0 if v >= 0 else -1.0
                 near = V[max(j - 1, 0):j + 2, xi]

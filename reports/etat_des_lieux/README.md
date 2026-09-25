@@ -1,26 +1,34 @@
 # État des lieux des indicateurs — direction à 5, 10, 15 minutes
 
-*Généré le 2026-09-25 22:54 UTC par `python -m tradebot study --tickers BTCUSDT SOLUSDT --days 30` (durée totale : 67 s ; commit `9892f5a` + modifications locales). Actifs : BTCUSDT, SOLUSDT ; 30 jours de barres 1m ; apprentissage = 0,60 premiers de la période.*
+*Généré le 2026-09-25 23:21 UTC par `python -m tradebot study --days 365` (durée totale : 1 346 s ; commit `80ebb37` + modifications locales). Actifs : BTCUSDT, SOLUSDT, ETHUSDT, XRPUSDT, BNBUSDT, DOGEUSDT ; 365 jours de barres 1m ; apprentissage = 0,60 premiers de la période.*
 
-> Recherche uniquement. Un indicateur « significatif » n'est pas une stratégie rentable : à 1 minute, couvrir 10 pb de frais aller-retour demande 72 à 89 % de bonnes directions (docs/research/methodologie.md § 0), alors que le meilleur hit-rate hors échantillon mesuré ici est de 53,9 %.
+> Recherche uniquement. Un indicateur « significatif » n'est pas une stratégie rentable : à 1 minute, couvrir 10 pb de frais aller-retour demande 72 à 89 % de bonnes directions (docs/research/methodologie.md § 0), alors que le meilleur hit-rate hors échantillon mesuré ici est de 52,1 %.
 
 ## 0. En bref
 
-* **501 couples (indicateur, horizon)** mesurés sur 2 actif(s), soit **975 tests** : il faut une correction pour tests multiples (q-valeurs BH et BY) et viser |t| > 3.
-* Plus fort signal : **`ret_60`** (momentum) à h = 15 : IC moyen −0,076, z de Stouffer −6,5, q BY 0,000, hit-rate hors échantillon 53,9 %, AUC 0,550.
+* **501 couples (indicateur, horizon)** mesurés sur 6 actif(s), soit **2 979 tests** : il faut une correction pour tests multiples (q-valeurs BH et BY) et viser |t| > 3.
+* Plus fort signal : **`ema_dist_60`** (tendance) à h = 15 : IC moyen −0,049, z de Stouffer −26,7, q BY 0,000, hit-rate hors échantillon 52,1 %, AUC 0,531.
 * Sens : 100 % des 20 plus forts |IC| sont négatifs (IC < 0 : l'indicateur annonce un **retournement** ; > 0 : une continuation).
-* **236 couples sur 501** ont à la fois q BY < 5 % et |z| > 3. Le z combine les actifs comme s'ils étaient indépendants (optimiste : les cryptos sont corrélées).
+* **364 couples sur 501** ont à la fois q BY < 5 % et |z| > 3. Le z combine les actifs comme s'ils étaient indépendants (optimiste : les cryptos sont corrélées).
 * Stabilité du top 20 : même signe sur tous les actifs pour 20/20 ; même signe entre apprentissage et test pour 20/20.
-* Meilleur hit-rate hors échantillon : 53,9 % (`ret_vol_60`, h = 15) ; médiane des couples : 51,1 %.
-* Modèle combiné, BTCUSDT : h = 5 : logit 51,4 % (AUC 0,518) contre retournement 50,7 % ; h = 10 : hgb 51,2 % (AUC 0,512) contre retournement 51,2 % ; h = 15 : logit 51,2 % (AUC 0,510) contre retournement 51,1 %.
-* Modèle combiné, SOLUSDT : h = 5 : hgb 52,1 % (AUC 0,522) contre retournement 50,3 % ; h = 10 : logit 51,2 % (AUC 0,519) contre retournement 51,3 % ; h = 15 : logit 51,9 % (AUC 0,519) contre retournement 51,1 %.
+* Meilleur hit-rate hors échantillon : 52,1 % (`ichimoku_cloud_dist`, h = 15) ; médiane des couples : 50,9 %.
+* Modèle combiné, BTCUSDT : h = 5 : hgb 51,8 % (AUC 0,526) contre retournement 51,6 % ; h = 10 : hgb 52,0 % (AUC 0,528) contre retournement 51,4 % ; h = 15 : hgb 52,5 % (AUC 0,534) contre retournement 52,1 %.
+* Modèle combiné, SOLUSDT : h = 5 : hgb 51,9 % (AUC 0,527) contre retournement 51,4 % ; h = 10 : hgb 52,1 % (AUC 0,531) contre retournement 51,7 % ; h = 15 : hgb 52,0 % (AUC 0,529) contre retournement 52,0 %.
+* Modèle combiné, ETHUSDT : h = 5 : hgb 52,6 % (AUC 0,537) contre retournement 51,6 % ; h = 10 : hgb 52,7 % (AUC 0,539) contre retournement 52,1 % ; h = 15 : hgb 53,3 % (AUC 0,544) contre retournement 52,6 %.
+* Modèle combiné, XRPUSDT : h = 5 : hgb 52,0 % (AUC 0,526) contre retournement 51,6 % ; h = 10 : logit 52,2 % (AUC 0,528) contre retournement 51,5 % ; h = 15 : hgb 52,3 % (AUC 0,530) contre retournement 51,9 %.
+* Modèle combiné, BNBUSDT : h = 5 : logit 51,4 % (AUC 0,519) contre retournement 51,0 % ; h = 10 : hgb 51,8 % (AUC 0,524) contre retournement 50,6 % ; h = 15 : hgb 51,8 % (AUC 0,522) contre retournement 51,6 %.
+* Modèle combiné, DOGEUSDT : h = 5 : hgb 51,8 % (AUC 0,527) contre retournement 50,9 % ; h = 10 : hgb 52,6 % (AUC 0,533) contre retournement 51,8 % ; h = 15 : hgb 53,1 % (AUC 0,539) contre retournement 52,6 %.
 
 ## 1. Données
 
 | ticker | n_bars | start | end | missing_bars | split_time | n_indicators | n_skipped | benchmark | deriv_coverage |
 |---|---|---|---|---|---|---|---|---|---|
-| BTCUSDT | 43 199 | 2026-08-26 22:54 UTC | 2026-09-25 22:52 UTC | 0 | 2026-09-13 22:53 UTC | 158 | 9 | — | 97,0 % |
-| SOLUSDT | 43 199 | 2026-08-26 22:55 UTC | 2026-09-25 22:53 UTC | 0 | 2026-09-13 22:54 UTC | 167 | 0 | BTCUSDT | 97,0 % |
+| BTCUSDT | 525 599 | 2025-09-25 23:00 UTC | 2026-09-25 22:58 UTC | 0 | 2026-05-02 22:59 UTC | 158 | 9 | — | 99,7 % |
+| SOLUSDT | 525 599 | 2025-09-25 23:04 UTC | 2026-09-25 23:02 UTC | 0 | 2026-05-02 23:03 UTC | 167 | 0 | BTCUSDT | 99,7 % |
+| ETHUSDT | 525 599 | 2025-09-25 23:09 UTC | 2026-09-25 23:07 UTC | 0 | 2026-05-02 23:08 UTC | 167 | 0 | BTCUSDT | 99,7 % |
+| XRPUSDT | 525 599 | 2025-09-25 23:12 UTC | 2026-09-25 23:10 UTC | 0 | 2026-05-02 23:11 UTC | 167 | 0 | BTCUSDT | 99,7 % |
+| BNBUSDT | 525 599 | 2025-09-25 23:16 UTC | 2026-09-25 23:14 UTC | 0 | 2026-05-02 23:15 UTC | 167 | 0 | BTCUSDT | 99,7 % |
+| DOGEUSDT | 525 599 | 2025-09-25 23:19 UTC | 2026-09-25 23:17 UTC | 0 | 2026-05-02 23:18 UTC | 167 | 0 | BTCUSDT | 99,7 % |
 
 ## 2. Les indicateurs les plus informatifs
 
@@ -30,26 +38,26 @@ Les 20 couples (indicateur, horizon) de plus grand |IC moyen| (`top_20.csv`) :
 
 | indicator | family | horizon | ic_mean | frac_same_sign | ic_train_mean | ic_test_mean | hit_rate_oos_mean | auc_oos_mean | z_combined | q_value_by |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `ret_60` | momentum | 15 | −0,076 | 1,00 | −0,064 | −0,096 | 53,9 % | 0,550 | −6,5 | 0,000 |
-| `ret_vol_60` | momentum | 15 | −0,073 | 1,00 | −0,063 | −0,089 | 53,9 % | 0,548 | −6,4 | 0,000 |
-| `lin_slope_60` | tendance | 15 | −0,073 | 1,00 | −0,056 | −0,099 | 53,6 % | 0,549 | −6,2 | 0,000 |
-| `ret_skip_60` | momentum | 15 | −0,071 | 1,00 | −0,061 | −0,088 | 53,9 % | 0,547 | −6,3 | 0,000 |
-| `rel_ret_60` | marche | 15 | −0,071 | 1,00 | −0,056 | −0,098 | 52,7 % | 0,550 | −4,4 | 0,000 |
-| `ema_gap_15_60` | tendance | 15 | −0,071 | 1,00 | −0,058 | −0,091 | 53,6 % | 0,548 | −6,1 | 0,000 |
-| `ichimoku_cloud_dist` | tendance | 15 | −0,070 | 1,00 | −0,053 | −0,096 | 53,7 % | 0,553 | −6,3 | 0,000 |
-| `ret_60` | momentum | 10 | −0,069 | 1,00 | −0,056 | −0,087 | 53,7 % | 0,548 | −7,1 | 0,000 |
-| `zscore_60` | statistique | 15 | −0,066 | 1,00 | −0,049 | −0,093 | 53,5 % | 0,552 | −6,3 | 0,000 |
-| `tick_imb_60` | flux | 15 | −0,066 | 1,00 | −0,066 | −0,072 | 52,5 % | 0,537 | −5,8 | 0,000 |
-| `ret_vol_60` | momentum | 10 | −0,066 | 1,00 | −0,055 | −0,082 | 53,7 % | 0,548 | −7,0 | 0,000 |
-| `sma_dist_60` | tendance | 15 | −0,065 | 1,00 | −0,049 | −0,090 | 53,5 % | 0,550 | −5,9 | 0,000 |
-| `ichimoku_cloud_dist` | tendance | 10 | −0,064 | 1,00 | −0,048 | −0,088 | 53,5 % | 0,550 | −7,0 | 0,000 |
-| `lin_slope_60` | tendance | 10 | −0,064 | 1,00 | −0,045 | −0,092 | 53,8 % | 0,550 | −6,6 | 0,000 |
-| `obv_slope_60` | volume | 15 | −0,064 | 1,00 | −0,065 | −0,068 | 52,3 % | 0,535 | −5,7 | 0,000 |
-| `ret_skip_60` | momentum | 10 | −0,064 | 1,00 | −0,053 | −0,081 | 53,7 % | 0,547 | −6,9 | 0,000 |
-| `zscore_60` | statistique | 10 | −0,063 | 1,00 | −0,048 | −0,085 | 53,5 % | 0,550 | −7,0 | 0,000 |
-| `ema_dist_60` | tendance | 15 | −0,063 | 1,00 | −0,052 | −0,080 | 53,2 % | 0,546 | −5,8 | 0,000 |
-| `mom_z_60` | momentum | 15 | −0,063 | 1,00 | −0,045 | −0,088 | 53,3 % | 0,546 | −5,4 | 0,000 |
-| `rel_ret_60` | marche | 10 | −0,063 | 1,00 | −0,049 | −0,083 | 52,6 % | 0,547 | −4,6 | 0,000 |
+| `ema_dist_60` | tendance | 15 | −0,049 | 1,00 | −0,051 | −0,045 | 52,1 % | 0,531 | −26,7 | 0,000 |
+| `force_index_13` | volume | 15 | −0,047 | 1,00 | −0,050 | −0,043 | 52,0 % | 0,528 | −29,8 | 0,000 |
+| `ema_dist_30` | tendance | 15 | −0,047 | 1,00 | −0,051 | −0,040 | 52,0 % | 0,528 | −27,5 | 0,000 |
+| `ema_dist_60` | tendance | 10 | −0,046 | 1,00 | −0,048 | −0,043 | 52,0 % | 0,530 | −30,1 | 0,000 |
+| `zscore_60` | statistique | 15 | −0,046 | 1,00 | −0,048 | −0,042 | 52,0 % | 0,529 | −25,8 | 0,000 |
+| `sma_dist_60` | tendance | 15 | −0,046 | 1,00 | −0,048 | −0,041 | 52,0 % | 0,528 | −25,0 | 0,000 |
+| `ema_gap_5_20` | tendance | 15 | −0,046 | 1,00 | −0,051 | −0,037 | 51,8 % | 0,525 | −26,5 | 0,000 |
+| `sma_dist_30` | tendance | 15 | −0,046 | 1,00 | −0,051 | −0,037 | 51,8 % | 0,526 | −26,6 | 0,000 |
+| `rsi_14` | momentum | 15 | −0,045 | 1,00 | −0,049 | −0,038 | 51,9 % | 0,527 | −27,2 | 0,000 |
+| `macd_line_12_26` | tendance | 15 | −0,045 | 1,00 | −0,049 | −0,038 | 51,8 % | 0,526 | −24,7 | 0,000 |
+| `di_diff_14` | tendance | 15 | −0,045 | 1,00 | −0,050 | −0,037 | 51,9 % | 0,526 | −27,0 | 0,000 |
+| `force_index_13` | volume | 10 | −0,045 | 1,00 | −0,045 | −0,043 | 52,0 % | 0,528 | −32,3 | 0,000 |
+| `tsi_25_13` | momentum | 15 | −0,045 | 1,00 | −0,049 | −0,037 | 51,8 % | 0,525 | −24,4 | 0,000 |
+| `ema_dist_30` | tendance | 10 | −0,044 | 1,00 | −0,047 | −0,040 | 52,0 % | 0,527 | −30,4 | 0,000 |
+| `ichimoku_cloud_dist` | tendance | 15 | −0,044 | 1,00 | −0,046 | −0,041 | 52,1 % | 0,528 | −24,2 | 0,000 |
+| `sma_dist_60` | tendance | 10 | −0,044 | 1,00 | −0,046 | −0,040 | 51,9 % | 0,527 | −28,6 | 0,000 |
+| `macd_line_6_13` | tendance | 15 | −0,044 | 1,00 | −0,049 | −0,035 | 51,7 % | 0,524 | −26,4 | 0,000 |
+| `vwap_dev_60` | volume | 15 | −0,044 | 1,00 | −0,047 | −0,038 | 51,9 % | 0,526 | −24,1 | 0,000 |
+| `zscore_60` | statistique | 10 | −0,044 | 1,00 | −0,045 | −0,040 | 51,9 % | 0,528 | −28,9 | 0,000 |
+| `macd_signal_6_13_5` | tendance | 15 | −0,044 | 1,00 | −0,050 | −0,033 | 51,6 % | 0,523 | −25,4 | 0,000 |
 
 ## 3. Les moins informatifs
 
@@ -57,26 +65,26 @@ Les 20 couples de plus petit |IC moyen| parmi ceux mesurés sur tous les actifs 
 
 | indicator | family | horizon | ic_mean | frac_same_sign | ic_train_mean | ic_test_mean | hit_rate_oos_mean | auc_oos_mean | z_combined | q_value_by |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `range_atr_14` | volatilite | 15 | +0,000 | 0,50 | −0,006 | +0,008 | 49,8 % | 0,499 | −0,1 | 1,000 |
-| `session_asia` | calendrier | 5 | −0,000 | 0,50 | −0,002 | +0,001 | 49,8 % | 0,502 | +0,0 | 1,000 |
-| `ls_ratio_accounts_log` | derives | 10 | −0,000 | 0,50 | +0,012 | −0,003 | 49,7 % | 0,498 | +0,1 | 1,000 |
-| `roll_spread_60` | microstructure | 15 | +0,000 | 0,50 | +0,026 | −0,036 | 48,9 % | 0,487 | −0,2 | 1,000 |
-| `ls_ratio_top_z_1440` | derives | 10 | −0,000 | 0,50 | +0,008 | −0,016 | 49,9 % | 0,497 | +0,6 | 1,000 |
-| `ls_ratio_accounts_log` | derives | 5 | −0,000 | 1,00 | +0,006 | −0,001 | 49,9 % | 0,502 | +0,0 | 1,000 |
-| `atr_pct_14` | volatilite | 5 | −0,001 | 0,50 | −0,006 | +0,003 | 49,9 % | 0,500 | +0,0 | 1,000 |
-| `session_asia` | calendrier | 10 | −0,001 | 1,00 | −0,002 | −0,001 | 49,1 % | 0,496 | +0,0 | 1,000 |
-| `ls_ratio_top_z_1440` | derives | 15 | −0,001 | 0,50 | +0,009 | −0,019 | 49,9 % | 0,494 | +0,5 | 1,000 |
-| `bb_width_rel_20` | volatilite | 10 | +0,001 | 0,50 | −0,008 | +0,012 | 49,6 % | 0,494 | +0,1 | 1,000 |
-| `rv_ratio_15_240` | volatilite | 15 | −0,001 | 1,00 | −0,001 | −0,001 | 49,5 % | 0,493 | −0,1 | 1,000 |
-| `vr_5_240` | statistique | 15 | −0,001 | 0,50 | +0,001 | −0,007 | 50,5 % | 0,503 | −0,1 | 1,000 |
-| `rv_60` | volatilite | 5 | +0,001 | 1,00 | −0,007 | +0,006 | 49,6 % | 0,498 | +0,1 | 1,000 |
-| `rel_volume_1440` | volume | 5 | +0,001 | 0,50 | −0,007 | +0,009 | 49,7 % | 0,500 | +0,1 | 1,000 |
-| `trades_rel_60` | flux | 5 | +0,001 | 0,50 | +0,001 | +0,001 | 49,9 % | 0,499 | +0,2 | 1,000 |
-| `ls_ratio_accounts_log` | derives | 15 | −0,001 | 0,50 | +0,010 | +0,001 | 49,6 % | 0,500 | +0,2 | 1,000 |
-| `session_asia` | calendrier | 15 | −0,001 | 1,00 | +0,001 | −0,007 | 48,9 % | 0,497 | −0,0 | 1,000 |
-| `garman_klass_15` | volatilite | 5 | −0,001 | 0,50 | −0,008 | +0,005 | 49,9 % | 0,500 | +0,0 | 1,000 |
-| `bb_width_20_2` | volatilite | 10 | −0,001 | 0,50 | −0,012 | +0,010 | 49,4 % | 0,495 | −0,1 | 1,000 |
-| `roll_spread_60` | microstructure | 5 | −0,001 | 0,50 | +0,018 | −0,027 | 48,5 % | 0,483 | −0,3 | 1,000 |
+| `jump_ratio_240` | volatilite | 5 | −0,000 | 0,67 | −0,001 | +0,002 | 49,9 % | 0,499 | −0,6 | 1,000 |
+| `rel_volume_1440` | volume | 5 | +0,000 | 0,50 | −0,002 | +0,003 | 50,0 % | 0,500 | +0,4 | 1,000 |
+| `amihud_rel_60` | microstructure | 5 | −0,000 | 0,67 | +0,003 | −0,005 | 49,9 % | 0,498 | +0,3 | 1,000 |
+| `hour_cos` | calendrier | 5 | −0,000 | 0,50 | +0,004 | −0,006 | 49,6 % | 0,497 | −0,5 | 1,000 |
+| `min_since_funding` | calendrier | 15 | +0,000 | 0,67 | −0,002 | +0,003 | 49,9 % | 0,498 | −0,0 | 1,000 |
+| `min_to_funding` | calendrier | 15 | −0,000 | 0,67 | +0,002 | −0,003 | 49,9 % | 0,498 | +0,0 | 1,000 |
+| `efficiency_ratio_30` | tendance | 5 | +0,000 | 0,67 | −0,005 | +0,009 | 49,8 % | 0,497 | +0,2 | 1,000 |
+| `rel_volume_60` | volume | 10 | +0,000 | 0,67 | −0,001 | +0,002 | 50,0 % | 0,499 | +0,2 | 1,000 |
+| `rv_15` | volatilite | 10 | +0,000 | 0,33 | +0,001 | −0,001 | 49,9 % | 0,500 | +0,7 | 1,000 |
+| `min_since_funding` | calendrier | 10 | +0,000 | 0,50 | −0,001 | +0,002 | 50,0 % | 0,500 | +0,1 | 1,000 |
+| `min_to_funding` | calendrier | 10 | −0,000 | 0,50 | +0,001 | −0,002 | 50,0 % | 0,500 | −0,1 | 1,000 |
+| `rel_volume_tod` | volume | 10 | +0,000 | 0,33 | −0,001 | +0,002 | 50,0 % | 0,501 | +0,4 | 1,000 |
+| `rv_60` | volatilite | 15 | −0,000 | 0,50 | −0,001 | +0,002 | 49,7 % | 0,498 | +0,5 | 1,000 |
+| `jump_ratio_240` | volatilite | 10 | −0,000 | 0,50 | −0,002 | +0,002 | 50,0 % | 0,500 | −0,7 | 1,000 |
+| `rel_volume_60` | volume | 5 | −0,001 | 0,50 | −0,001 | +0,001 | 50,0 % | 0,500 | −0,4 | 1,000 |
+| `parkinson_15` | volatilite | 10 | −0,001 | 0,67 | −0,001 | +0,001 | 49,8 % | 0,498 | +0,4 | 1,000 |
+| `ls_ratio_top_z_1440` | derives | 5 | −0,001 | 0,50 | −0,000 | −0,001 | 50,0 % | 0,500 | +1,3 | 1,000 |
+| `kurt_60` | statistique | 5 | +0,001 | 0,83 | −0,001 | +0,004 | 50,0 % | 0,500 | +0,1 | 1,000 |
+| `hour_cos` | calendrier | 10 | −0,001 | 0,67 | +0,005 | −0,009 | 49,4 % | 0,495 | −0,7 | 1,000 |
+| `hour_cos` | calendrier | 15 | −0,001 | 0,67 | +0,006 | −0,011 | 49,2 % | 0,493 | −0,6 | 1,000 |
 
 ## 4. Synthèse par famille
 
@@ -84,16 +92,16 @@ Les 20 couples de plus petit |IC moyen| parmi ceux mesurés sur tous les actifs 
 
 | family | n_indicators | n_pairs | median_abs_ic | max_abs_ic | best_indicator | best_horizon | best_ic | frac_q_by_05 | mean_hit_rate_oos | mean_auc_oos |
 |---|---|---|---|---|---|---|---|---|---|---|
-| momentum | 30 | 90 | 0,029 | 0,076 | `ret_60` | 15 | −0,076 | 84 % | 51,7 % | 0,523 |
-| tendance | 33 | 99 | 0,034 | 0,073 | `lin_slope_60` | 15 | −0,073 | 77 % | 51,8 % | 0,524 |
-| marche | 9 | 27 | 0,022 | 0,071 | `rel_ret_60` | 15 | −0,071 | 22 % | 51,0 % | 0,516 |
-| statistique | 10 | 30 | 0,015 | 0,066 | `zscore_60` | 15 | −0,066 | 40 % | 50,8 % | 0,512 |
-| flux | 12 | 36 | 0,029 | 0,066 | `tick_imb_60` | 15 | −0,066 | 61 % | 51,5 % | 0,520 |
-| volume | 15 | 45 | 0,036 | 0,064 | `obv_slope_60` | 15 | −0,064 | 71 % | 51,2 % | 0,519 |
-| volatilite | 19 | 57 | 0,007 | 0,059 | `donchian_pos_60` | 15 | −0,059 | 23 % | 50,5 % | 0,507 |
-| calendrier | 14 | 42 | 0,009 | 0,037 | `session_us` | 15 | +0,037 | 2 % | 50,2 % | 0,504 |
-| derives | 14 | 42 | 0,011 | 0,034 | `funding_rate_bp` | 15 | +0,034 | 5 % | 50,2 % | 0,502 |
-| microstructure | 11 | 33 | 0,007 | 0,022 | `amihud_rel_60` | 15 | −0,022 | 0 % | 50,0 % | 0,501 |
+| tendance | 33 | 99 | 0,035 | 0,049 | `ema_dist_60` | 15 | −0,049 | 97 % | 51,4 % | 0,519 |
+| volume | 15 | 45 | 0,030 | 0,047 | `force_index_13` | 15 | −0,047 | 82 % | 51,2 % | 0,517 |
+| statistique | 10 | 30 | 0,009 | 0,046 | `zscore_60` | 15 | −0,046 | 50 % | 50,7 % | 0,510 |
+| momentum | 30 | 90 | 0,032 | 0,045 | `rsi_14` | 15 | −0,045 | 100 % | 51,4 % | 0,519 |
+| volatilite | 19 | 57 | 0,003 | 0,042 | `keltner_pos_20` | 15 | −0,042 | 40 % | 50,4 % | 0,506 |
+| flux | 12 | 36 | 0,020 | 0,040 | `ret15_x_taker_abs15` | 15 | −0,040 | 97 % | 50,8 % | 0,512 |
+| marche | 9 | 27 | 0,020 | 0,036 | `bench_ret_15` | 15 | −0,036 | 78 % | 50,7 % | 0,510 |
+| calendrier | 14 | 42 | 0,005 | 0,026 | `ret15_x_weekend` | 15 | −0,026 | 50 % | 50,4 % | 0,504 |
+| derives | 14 | 42 | 0,004 | 0,018 | `taker_ls_ratio_log` | 15 | −0,018 | 38 % | 50,2 % | 0,502 |
+| microstructure | 11 | 33 | 0,004 | 0,016 | `clv_15` | 15 | −0,016 | 45 % | 50,2 % | 0,502 |
 
 ## 5. Modèles combinés (walk-forward purgé) contre baselines
 
@@ -103,18 +111,42 @@ Tous les indicateurs de l'actif, `logit` (régression logistique régularisée) 
 
 | ticker | model | acc h5 | acc h10 | acc h15 | AUC h5 | AUC h10 | AUC h15 | acc_w h5 | acc_w h10 | acc_w h15 | n_eff (h max) |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| BTCUSDT | `logit` | 51,4 % | 51,2 % | 51,2 % | 0,518 | 0,516 | 0,510 | 51,4 % | 50,2 % | 50,0 % | 2 396 |
-| BTCUSDT | `hgb` | 51,2 % | 51,2 % | 50,1 % | 0,520 | 0,512 | 0,515 | 48,9 % | 49,8 % | 50,0 % | 2 396 |
-| BTCUSDT | `reversal_h` | 50,7 % | 51,2 % | 51,1 % | 0,508 | 0,512 | 0,510 | 49,7 % | 50,8 % | 50,1 % | 2 396 |
-| BTCUSDT | `momentum_h` | 49,2 % | 48,8 % | 49,0 % | 0,492 | 0,488 | 0,490 | 50,3 % | 49,3 % | 49,9 % | 2 396 |
-| BTCUSDT | `always_up` | 50,3 % | 50,0 % | 50,1 % | 0,500 | 0,500 | 0,500 | 50,6 % | 50,9 % | 51,1 % | 2 396 |
-| BTCUSDT | `majority_prev_day` | 50,2 % | 50,5 % | 48,0 % | 0,503 | 0,505 | 0,480 | 48,6 % | 49,9 % | 46,5 % | 2 396 |
-| SOLUSDT | `logit` | 50,8 % | 51,2 % | 51,9 % | 0,512 | 0,519 | 0,519 | 50,3 % | 51,5 % | 51,9 % | 2 357 |
-| SOLUSDT | `hgb` | 52,1 % | 50,6 % | 51,9 % | 0,522 | 0,514 | 0,522 | 50,8 % | 51,1 % | 52,1 % | 2 357 |
-| SOLUSDT | `reversal_h` | 50,3 % | 51,3 % | 51,1 % | 0,503 | 0,512 | 0,512 | 49,9 % | 51,0 % | 50,9 % | 2 357 |
-| SOLUSDT | `momentum_h` | 49,7 % | 49,0 % | 48,8 % | 0,497 | 0,488 | 0,488 | 50,1 % | 49,0 % | 49,2 % | 2 357 |
-| SOLUSDT | `always_up` | 50,0 % | 50,3 % | 50,8 % | 0,500 | 0,500 | 0,500 | 50,9 % | 51,3 % | 51,7 % | 2 357 |
-| SOLUSDT | `majority_prev_day` | 50,2 % | 50,5 % | 50,8 % | 0,502 | 0,505 | 0,509 | 50,4 % | 50,1 % | 50,4 % | 2 357 |
+| BTCUSDT | `logit` | 51,7 % | 51,9 % | 52,1 % | 0,525 | 0,526 | 0,532 | 50,7 % | 50,9 % | 51,0 % | 29 175 |
+| BTCUSDT | `hgb` | 51,8 % | 52,0 % | 52,5 % | 0,526 | 0,528 | 0,534 | 50,6 % | 51,0 % | 51,2 % | 29 175 |
+| BTCUSDT | `reversal_h` | 51,6 % | 51,4 % | 52,1 % | 0,516 | 0,514 | 0,521 | 51,0 % | 50,7 % | 51,2 % | 29 175 |
+| BTCUSDT | `momentum_h` | 48,4 % | 48,6 % | 47,9 % | 0,484 | 0,486 | 0,479 | 49,0 % | 49,3 % | 48,8 % | 29 175 |
+| BTCUSDT | `always_up` | 49,6 % | 49,7 % | 49,9 % | 0,500 | 0,500 | 0,500 | 50,0 % | 50,0 % | 50,0 % | 29 175 |
+| BTCUSDT | `majority_prev_day` | 50,3 % | 50,3 % | 50,0 % | 0,503 | 0,503 | 0,499 | 50,1 % | 50,3 % | 49,8 % | 29 175 |
+| SOLUSDT | `logit` | 51,4 % | 51,7 % | 51,8 % | 0,522 | 0,524 | 0,527 | 50,2 % | 50,2 % | 50,6 % | 28 570 |
+| SOLUSDT | `hgb` | 51,9 % | 52,1 % | 52,0 % | 0,527 | 0,531 | 0,529 | 50,3 % | 50,5 % | 50,5 % | 28 570 |
+| SOLUSDT | `reversal_h` | 51,4 % | 51,7 % | 52,0 % | 0,514 | 0,517 | 0,520 | 50,0 % | 50,4 % | 50,6 % | 28 570 |
+| SOLUSDT | `momentum_h` | 48,7 % | 48,3 % | 48,1 % | 0,486 | 0,483 | 0,480 | 50,0 % | 49,7 % | 49,5 % | 28 570 |
+| SOLUSDT | `always_up` | 49,9 % | 49,8 % | 49,9 % | 0,500 | 0,500 | 0,500 | 50,0 % | 49,9 % | 49,9 % | 28 570 |
+| SOLUSDT | `majority_prev_day` | 50,3 % | 50,5 % | 50,5 % | 0,503 | 0,505 | 0,505 | 50,5 % | 50,6 % | 50,8 % | 28 570 |
+| ETHUSDT | `logit` | 52,4 % | 52,6 % | 53,0 % | 0,533 | 0,536 | 0,540 | 50,4 % | 50,6 % | 51,2 % | 29 161 |
+| ETHUSDT | `hgb` | 52,6 % | 52,7 % | 53,3 % | 0,537 | 0,539 | 0,544 | 50,2 % | 50,2 % | 50,6 % | 29 161 |
+| ETHUSDT | `reversal_h` | 51,6 % | 52,1 % | 52,6 % | 0,516 | 0,521 | 0,526 | 50,1 % | 50,2 % | 50,5 % | 29 161 |
+| ETHUSDT | `momentum_h` | 48,3 % | 47,9 % | 47,4 % | 0,484 | 0,479 | 0,474 | 49,9 % | 49,8 % | 49,5 % | 29 161 |
+| ETHUSDT | `always_up` | 50,0 % | 49,7 % | 49,9 % | 0,500 | 0,500 | 0,500 | 50,0 % | 49,9 % | 49,9 % | 29 161 |
+| ETHUSDT | `majority_prev_day` | 50,2 % | 50,4 % | 50,2 % | 0,502 | 0,504 | 0,502 | 50,3 % | 50,6 % | 50,4 % | 29 161 |
+| XRPUSDT | `logit` | 51,6 % | 52,2 % | 52,1 % | 0,522 | 0,528 | 0,530 | 50,8 % | 51,1 % | 50,8 % | 28 752 |
+| XRPUSDT | `hgb` | 52,0 % | 52,0 % | 52,3 % | 0,526 | 0,528 | 0,530 | 51,0 % | 50,8 % | 51,4 % | 28 752 |
+| XRPUSDT | `reversal_h` | 51,6 % | 51,5 % | 51,9 % | 0,516 | 0,515 | 0,519 | 50,8 % | 50,5 % | 50,5 % | 28 752 |
+| XRPUSDT | `momentum_h` | 48,4 % | 48,6 % | 48,1 % | 0,484 | 0,485 | 0,481 | 49,2 % | 49,6 % | 49,6 % | 28 752 |
+| XRPUSDT | `always_up` | 49,4 % | 49,3 % | 49,3 % | 0,500 | 0,500 | 0,500 | 49,9 % | 49,8 % | 49,7 % | 28 752 |
+| XRPUSDT | `majority_prev_day` | 50,4 % | 50,5 % | 50,8 % | 0,502 | 0,504 | 0,507 | 50,2 % | 50,2 % | 50,6 % | 28 752 |
+| BNBUSDT | `logit` | 51,4 % | 51,6 % | 51,6 % | 0,519 | 0,522 | 0,524 | 50,5 % | 50,8 % | 50,9 % | 29 080 |
+| BNBUSDT | `hgb` | 51,2 % | 51,8 % | 51,8 % | 0,517 | 0,524 | 0,522 | 50,2 % | 50,7 % | 50,6 % | 29 080 |
+| BNBUSDT | `reversal_h` | 51,0 % | 50,6 % | 51,6 % | 0,510 | 0,505 | 0,516 | 50,2 % | 49,3 % | 50,8 % | 29 080 |
+| BNBUSDT | `momentum_h` | 49,0 % | 49,5 % | 48,4 % | 0,490 | 0,495 | 0,484 | 49,8 % | 50,7 % | 49,2 % | 29 080 |
+| BNBUSDT | `always_up` | 50,2 % | 50,0 % | 50,2 % | 0,500 | 0,500 | 0,500 | 49,9 % | 49,9 % | 49,9 % | 29 080 |
+| BNBUSDT | `majority_prev_day` | 50,5 % | 50,1 % | 50,4 % | 0,505 | 0,501 | 0,503 | 50,3 % | 50,3 % | 50,4 % | 29 080 |
+| DOGEUSDT | `logit` | 51,7 % | 52,6 % | 52,6 % | 0,526 | 0,533 | 0,536 | 50,3 % | 51,3 % | 51,0 % | 28 581 |
+| DOGEUSDT | `hgb` | 51,8 % | 52,6 % | 53,1 % | 0,527 | 0,533 | 0,539 | 50,1 % | 51,0 % | 50,9 % | 28 581 |
+| DOGEUSDT | `reversal_h` | 50,9 % | 51,8 % | 52,6 % | 0,509 | 0,519 | 0,526 | 49,4 % | 50,4 % | 50,7 % | 28 581 |
+| DOGEUSDT | `momentum_h` | 49,2 % | 48,2 % | 47,5 % | 0,491 | 0,481 | 0,474 | 50,8 % | 49,6 % | 49,3 % | 28 581 |
+| DOGEUSDT | `always_up` | 49,6 % | 49,5 % | 49,4 % | 0,500 | 0,500 | 0,500 | 49,8 % | 49,8 % | 49,7 % | 28 581 |
+| DOGEUSDT | `majority_prev_day` | 50,3 % | 50,3 % | 50,5 % | 0,502 | 0,502 | 0,504 | 50,0 % | 50,2 % | 50,5 % | 28 581 |
 
 `acc` : accuracy ; `acc_w` : accuracy pondérée par |rendement| (ce qui compte pour le P&L). Les baselines binaires valent 0,52 / 0,48 : leur AUC égale leur balanced accuracy.
 
@@ -259,9 +291,13 @@ Tous les indicateurs de l'actif, `logit` (régression logistique régularisée) 
 
 | ticker | chargement | référence de marché | indicateurs | cibles | scores des indicateurs | modèle combiné logit | modèle combiné hgb | baselines (mêmes barres) | agrégat et rapport | total |
 |---|---|---|---|---|---|---|---|---|---|---|
-| BTCUSDT | 2,1 | 0,0 | 0,6 | 0,0 | 4,1 | 17,6 | 5,4 | 0,3 | — | — |
-| SOLUSDT | 0,8 | 0,0 | 0,7 | 0,0 | 4,6 | 22,7 | 6,0 | 0,2 | — | — |
-| (global) | — | — | — | — | — | — | — | — | 1,8 | 67,4 |
+| BTCUSDT | 3,7 | 0,0 | 8,9 | 0,1 | 67,8 | 89,5 | 109,6 | 0,9 | — | — |
+| SOLUSDT | 2,0 | 0,0 | 7,7 | 0,1 | 60,0 | 73,7 | 150,2 | 0,8 | — | — |
+| ETHUSDT | 4,9 | 0,0 | 9,2 | 0,1 | 52,9 | 66,7 | 32,9 | 0,8 | — | — |
+| XRPUSDT | 3,0 | 0,0 | 8,9 | 0,1 | 90,8 | 90,7 | 43,9 | 0,7 | — | — |
+| BNBUSDT | 4,1 | 0,0 | 8,5 | 0,1 | 54,5 | 75,5 | 49,3 | 0,8 | — | — |
+| DOGEUSDT | 3,9 | 0,0 | 8,7 | 0,1 | 58,6 | 67,1 | 28,7 | 0,7 | — | — |
+| (global) | — | — | — | — | — | — | — | — | 2,1 | 1 345,6 |
 
 ## 9. Méthode et limites
 
