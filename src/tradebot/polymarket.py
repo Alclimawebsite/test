@@ -19,11 +19,14 @@ Faits vérifiés sur les API (septembre 2026)
   UTC en heure d'été (EDT), 01h/05h… UTC en heure d'hiver (EST). Autour des changements
   d'heure, Polymarket crée parfois des fenêtres en double ou en saute (8 mars 2026, 2 nov. 2025).
 * Règle de résolution : « Up » si prix de fin >= prix de début (égalité -> Up). Jusqu'au
-  ~6 août 2026 : dernier prix du flux Chainlink ``X/USD`` ; depuis le ~7 août 2026 : **TWAP
-  Chainlink 60 s** (``cryptoMarketConfig.twapEnabled``, ``twapLookbackSeconds=60``) —
-  voir ``UpDownMarket.resolution_rule``.
-* Frais preneur (``feeSchedule``) : aucun en déc. 2025, ``crypto_fees`` (rate 0,25,
-  exposant 2) vers mars 2026, ``crypto_fees_v2`` (rate 0,07, exposant 1) depuis ~mai 2026.
+  06/08/2026 : dernier prix du flux Chainlink ``X/USD`` ; du 07/08 au 13/08/2026 : TWAP
+  Chainlink 30 s pour le 5m et 60 s pour le 15m/4h ; depuis le 14/08/2026 00:00 UTC :
+  **TWAP Chainlink 60 s** partout (``cryptoMarketConfig.twapEnabled``,
+  ``twapLookbackSeconds``), lu au début et à la fin de la fenêtre — voir
+  ``UpDownMarket.resolution_rule`` et docs/research/polymarket.md.
+* Frais preneur (``feeSchedule``) : aucun en déc. 2025, ``crypto_15_min`` puis ``crypto_fees``
+  (rate 0,25, exposant 2) à partir de janv./févr. 2026, ``crypto_fees_v2`` (rate 0,07,
+  exposant 1) depuis le 30-31/03/2026. Toujours lire ``feeSchedule`` marché par marché.
   Voir :func:`taker_fee`.
 * ``bestBid``/``bestAsk`` de gamma peuvent être en retard de plusieurs dizaines de secondes :
   pour du temps réel utiliser :meth:`PolymarketClient.order_book` (CLOB).

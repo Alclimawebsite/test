@@ -1,6 +1,6 @@
 # Diagnostic empirique — marchés Polymarket crypto « Up or Down » (5 min, 15 min)
 
-*Généré le 25/09/2026 17:13 UTC par `scripts/polymarket_diagnostic.py` (temps d'exécution total : 18 s). Période : du 18/09/2026 00:00 au 25/09/2026 00:00 UTC (7 jours complets) ; actifs : BTC, ETH, SOL ; durées : 5m, 15m.*
+*Généré le 25/09/2026 17:19 UTC par `scripts/polymarket_diagnostic.py` (temps d'exécution total : 307 s). Période : du 18/09/2026 00:00 au 25/09/2026 00:00 UTC (7 jours complets) ; actifs : BTC, ETH, SOL ; durées : 5m, 15m.*
 
 > Lecture seule de données publiques. Aucun ordre, aucune clé. Depuis la France, Polymarket est en « close-only » et ces marchés sont `restricted` : ce diagnostic sert uniquement à évaluer nos prévisions contre un marché (simulation papier).
 
@@ -11,7 +11,7 @@
 * **Meilleur proxy Binance** : `b_twap60_1s` ((b*) TWAP60 exact : moyenne des closes 1s sur (E−60, E] ≥ moyenne sur (S−60, S]) : accord de **98,6 %** (IC 98,4 % – 98,9 %, n = 8 063). Avec des bougies 1m seulement : `b_vwap_last_vs_prev_1m`, **96,5 %**. La comparaison close/open 1m (a) n'atteint que 89,5 %. Exploratoire : en décalant la fenêtre Binance de 4 s vers le passé, l'erreur sur la variation baisse (RMSE 0,38 pb contre 0,68 pb) et l'accord passe à 99,0 %. Le flux Chainlink semble donc en retard d'environ 4 s sur Binance (décalage choisi sur ces données).
 * **Avant l'ouverture (S−30 s), le marché a un pouvoir prédictif faible mais mesurable** : prix moyen du jeton Up 0,499 (écart-type 0,017), 98,0 % des prix dans [0,45 ; 0,55], 22,4 % exactement à 0,505 ; Brier 0,2496 (pièce : 0,25) ; AUC 0,525 (IC 0,513 – 0,538).
 * **Une fois la fenêtre ouverte, le prix converge vite** (justesse du signe p ≥ 0,5) : 5m S+1 min : 58,7 % (Brier 0,239) ; 5m S+2 min : 68,3 % (Brier 0,201) ; 5m S+5 min : 92,3 % (Brier 0,054) ; 15m S+1 min : 54,5 % (Brier 0,246) ; 15m S+2 min : 58,8 % (Brier 0,235) ; 15m S+5 min : 68,9 % (Brier 0,199) ; 15m S+10 min : 81,1 % (Brier 0,132).
-* **Nowcast Binance contre prix du marché au même horodatage** : le nowcast sans paramètre fait mieux que le point `prices-history` (S+1 min, toutes cellules : justesse 60,4 % contre 57,6 %, ΔBrier -0,0063, IC -0,0088 ; -0,0038). Sur le 5m à S+2 min, la corrélation avec le marché est maximale quand le nowcast est calculé 10 s avant l'horodatage du point (0,957 contre 0,913 à 0 s). Le point `prices-history` reflète donc un état du carnet plus ancien que son horodatage : l'avance du nowcast est surtout un artefact de mesure. Ce n'est pas une inefficience exploitable, et il faut enregistrer le carnet en direct pour trancher.
+* **Nowcast Binance contre prix du marché au même horodatage** : le nowcast sans paramètre fait mieux que le point `prices-history` (S+1 min, toutes cellules : justesse 60,4 % contre 57,6 %, ΔBrier -0,0063, IC -0,0088 ; -0,0038). Sur le 5m à S+2 min, la corrélation avec le marché est maximale quand le nowcast est calculé 10 s avant l'horodatage du point (0,957 contre 0,913 à 0 s). À ce décalage, ΔBrier vaut 0,0007 (IC -0,0010 ; 0,0024). L'avance du nowcast équivaut donc à environ 10 s d'information. Deux explications sont possibles, et on ne peut pas les départager ici : (i) le point `prices-history` reflète un état du carnet plus ancien que son horodatage ; (ii) le milieu de fourchette réagit avec ce retard sur Binance. Seul un enregistrement du carnet en direct (WebSocket) permettrait de trancher. Même dans le cas (ii), il faudrait payer l'ask réel, et le § 6 bis montre que le côté informé se paie vite.
 * **Meilleure baseline pré-ouverture « propre »** (information ≤ S−30 s, choisie in-sample) : `gap_m30:momentum`, justesse 52,2 % (IC robuste 50,6 % – 53,7 %, n = 8 063).
 * À titre de comparaison, l'écart spot − TWAP60 **à S** (`gap_m0_1s`, information jusqu'à S : non exécutable au prix de S−30 s) atteint 56,4 % de justesse (IC robuste 54,8 % – 57,9 %) : c'est l'information « mécanique » créée par la règle TWAP. Sur le sous-échantillon de transactions, les preneurs ont payé en moyenne **0,565** pour ce côté entre S et S+5 s (contre 0,507 supposé à S−30 s), pour un taux de gain de 55,6 %. Le P&L au prix payé est de -2,59 c par part (IC -7,97 – 2,80 c, n = 369) : il n'est **pas significativement différent de zéro**. Une bonne partie de l'avantage est payée dès l'ouverture (§ 6 bis).
 * **P&L théorique** (achat preneur à S−30 s au prix milieu + 0,005, frais `crypto_fees_v2` inclus) de `gap_m30:momentum` : **-0,17 c par part** (IC robuste -1,71 – 1,38 c), pour un seuil de rentabilité de 52,3 % de réussite contre 52,2 % obtenu. ROI -0,32 %. L'IC contient zéro : **non significatif**. Résultat **in-sample** : la stratégie a été choisie sur ces mêmes données.
@@ -254,12 +254,12 @@ Corrélation marché / nowcast décalé :
 
 | Δ (s) | 5m S+2 min | 5m S+5 min | 15m S+2 min | 15m S+5 min | 15m S+10 min |
 |---|---|---|---|---|---|
-| 0,000 | 0,913 | 0,949 | 0,896 | 0,960 | 0,974 |
-| 10,000 | 0,957 | 0,976 | 0,946 | 0,976 | 0,981 |
-| 20,000 | 0,909 | 0,954 | 0,900 | 0,962 | 0,974 |
-| 30,000 | 0,838 | 0,925 | 0,827 | 0,943 | 0,965 |
-| 45,000 | 0,725 | 0,884 | 0,694 | 0,919 | 0,948 |
-| 60,000 | 0,603 | 0,844 | 0,573 | 0,890 | 0,933 |
+| 0 | 0,913 | 0,949 | 0,896 | 0,960 | 0,974 |
+| 10 | 0,957 | 0,976 | 0,946 | 0,976 | 0,981 |
+| 20 | 0,909 | 0,954 | 0,900 | 0,962 | 0,974 |
+| 30 | 0,838 | 0,925 | 0,827 | 0,943 | 0,965 |
+| 45 | 0,725 | 0,884 | 0,694 | 0,919 | 0,948 |
+| 60 | 0,603 | 0,844 | 0,573 | 0,890 | 0,933 |
 
 ## 5. Baselines Binance calculées AVANT l'ouverture
 
@@ -353,7 +353,7 @@ Sous-échantillon aléatoire (graine fixe) de 100 marchés par cellule, soit 600
 
 ## 7. Conséquences pour nos backtests
 
-1. **Étiquette** : utiliser `b_twap60_1s` (klines 1s), soit 98,6 % d'accord. Si l'on n'a que du 1m : `b_vwap_last_vs_prev_1m` (96,5 %). Il ne faut PAS utiliser close[t+h]/close[t], qui ne donne que 89,5 % d'accord : c'est le label `r_h` actuel de `targets.py`.
+1. **Étiquette** : utiliser `b_twap60_1s` (klines 1s), soit 98,6 % d'accord. Si l'on n'a que du 1m : `b_vwap_last_vs_prev_1m` (96,5 %). Il ne faut PAS utiliser close[t+h]/close[t], qui ne donne que 89,5 % d'accord : c'est le label `r_h` actuel de `targets.py`. Variante exploratoire : fenêtre décalée de 4 s, soit 99,0 %, à valider sur une autre période.
 2. **Origine** : l'origine d'une prévision est le début de fenêtre S (multiple de 300 ou 900 s en UTC). La référence est TWAP60(S), une moyenne sur (S−60 s, S] : elle est fixée à S et en partie connue dès S−30 s.
 3. **Comparaison au marché** : avant l'ouverture, le prix du marché est plat (0,499 en moyenne, entre 0,45 et 0,55 dans 98,0 % des cas). Il suffit en théorie de dépasser le seuil ask + frais (≈ 52,75 % pour acheter Up à 0,51). En revanche, pour le côté indiqué par l'écart spot − TWAP à S, le prix payé passe de 0,507 (ask supposé à S−30 s) à 0,565 dès [S, S+5 s] (§ 6 bis). Il faut toujours comparer le modèle au prix **au même instant d'information**, et jamais un modèle qui a vu la bougie [S−1m, S) à un prix de S−30 s.
 4. **Taille d'échantillon** : l'IC à 95 % d'une justesse autour de 50 % vaut ±1,1 points sur les 8 063 marchés, ±1,3 points sur les 6 047 marchés 5m, et ±3,8 points pour la plus petite cellule (672). Les actifs étant corrélés, l'IC robuste est plus large. Pour démontrer un avantage de 2 à 3 points, il faut plusieurs semaines de données et une sélection de stratégie faite hors échantillon.
@@ -362,21 +362,26 @@ Sous-échantillon aléatoire (graine fixe) de 100 marchés par cellule, soit 600
 
 * `UpDownMarket` ne conserve pas `event.eventMetadata` (`priceToBeat`, `finalPrice`), c'est-à-dire les niveaux Chainlink exacts qui décident de l'issue. Le script les relit avec `client._get` sur `/events`. Ce n'est pas bloquant, mais cela vaudrait un champ `price_to_beat` / `final_price` dans le client.
 * `prices-history` renvoie un milieu de fourchette, environ un point par minute : ce n'est pas un prix exécutable. L'ask est approché par milieu + 0,005, ce qui correspond au carnet 0,50/0,51 observé avant l'ouverture.
-* `resolution_rule` ne distingue pas le TWAP-30 (5m, du 07/08 au 13/08/2026) du TWAP-60. Il faut regarder `twap_lookback_s`. Sur la période étudiée, tous les marchés sont en TWAP-60 (voir les contrôles).
+* `resolution_rule` ne distingue pas le TWAP-30 du TWAP-60. Vérifié sur btc 5m : TWAP-30 du 07/08 au 13/08/2026 23:55 UTC (`btc-5m-twap-30`), TWAP-60 à partir du 14/08 00:00. La docstring du module annonce « TWAP 60 s depuis le ~7 août » pour toutes les durées, ce qui est inexact pour le 5m. `twap_lookback_s` est correct (30 ou 60) : c'est lui qu'il faut utiliser pour filtrer. Sur la période étudiée, tous les marchés sont en TWAP-60 (voir les contrôles).
+* Créneaux absents : 1 (eth-updown-5m-1789944900). Contre-vérification directe sur gamma (`/events` et `/markets`) : 1 / 1 sont bien inconnus de Polymarket. Ce n'est donc pas un bug du client.
+* Marchés résolus sans `finalPrice` dans `eventMetadata` : 6 (btc-updown-15m-1790015400, btc-updown-5m-1790016600, eth-updown-15m-1790015400, eth-updown-5m-1790016600, sol-updown-15m-1790015400, sol-updown-5m-1790016600). Ils sont exclus des comparaisons de niveaux Chainlink, mais gardés pour l'issue officielle.
+* Les points `prices-history` sont en retard d'environ 10 s sur l'information Binance (voir la robustesse du nowcast). Pour comparer un modèle au marché à la seconde près, il faut le carnet (`order_book`, WebSocket) ou les transactions (`trades`), pas `prices_history`.
 * Aucun bug bloquant trouvé : `list_updown_markets`, `prices_history`, `up_price_at`, `taker_fee` et `markets_to_frame` ont été utilisés tels quels, avec un contrôle croisé pour `up_price_at`.
 
 ## 9. Temps d'exécution
 
+Caches disque **désactivés** (`--no-cache`) : exécution à froid, toutes les données ont été retéléchargées.
+
 | étape | secondes |
 |---|---|
-| 1. liste des marchés (client.list_updown_markets) | 0,8 |
-| 2. eventMetadata (priceToBeat / finalPrice) | 0,5 |
-| 3. historique de prix du jeton Up (8063 marchés) | 10,6 |
-| 4. klines Binance 1m + 1s (zips journaliers) | 1,1 |
-| 5. variables et analyses | 4,4 |
-| 5b. transactions preneuses autour de S (600 marchés) | 0,1 |
+| 1. liste des marchés (client.list_updown_markets) | 12,3 |
+| 2. eventMetadata (priceToBeat / finalPrice) | 5,0 |
+| 3. historique de prix du jeton Up (8063 marchés) | 204,4 |
+| 4. klines Binance 1m + 1s (zips journaliers) | 11,3 |
+| 5. variables et analyses | 4,2 |
+| 5b. transactions preneuses autour de S (600 marchés) | 68,2 |
 | 6. écriture des CSV et du rapport | 0,8 |
-| total | 18,2 |
+| total | 306,8 |
 
 ## 10. Fichiers
 
