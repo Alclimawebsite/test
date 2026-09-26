@@ -194,13 +194,30 @@ def community_flag(close: pd.DataFrame, crash: float = 0.70, rebound: float = 2.
     return out
 
 
+def delist_notice(panel: Panel, notice_days: int = 5) -> pd.DataFrame:
+    """Vrai les ``notice_days`` derniers jours échangés d'une pièce retirée de la cote : Binance annonce
+    ses retraits plusieurs jours à l'avance (par exemple NEIROETHUSDT : annonce le 22/09/2025, règlement
+    le 26/09/2025), l'information est donc publique à ces dates."""
+    act = panel.active.to_numpy(bool)
+    n = act.shape[0]
+    out = np.zeros_like(act)
+    for j in range(act.shape[1]):
+        idx = np.flatnonzero(act[:, j])
+        if idx.size and idx[-1] < n - 1 and notice_days > 0:
+            last = idx[-1]
+            out[max(0, last - notice_days + 1): last + 1, j] = True
+    return pd.DataFrame(out, index=panel.close.index, columns=panel.close.columns)
+
+
 def eligibility(panel: Panel, min_age: int = 60, min_qvol: float = 5e6, qvol_win: int = 30,
-                community: bool = False) -> pd.DataFrame:
+                community: bool = False, notice_days: int = 5) -> pd.DataFrame:
     """Éligible au jour d : échangé ce jour, coté depuis ≥ min_age jours, volume quotidien médian
-    (30 j) ≥ min_qvol USDT, et, en option, critère « community coin »."""
+    (30 j) ≥ min_qvol USDT, pas de retrait de la cote annoncé, et, en option, critère « community coin »."""
     age = panel.active.cumsum()
     med = panel.qvol.where(panel.active).rolling(qvol_win, min_periods=qvol_win // 2).median()
     e = panel.active & (age >= min_age) & (med >= min_qvol)
+    if notice_days:
+        e &= ~delist_notice(panel, notice_days)
     if community:
         e &= community_flag(panel.close)
     return e.fillna(False)
@@ -209,17 +226,26 @@ def eligibility(panel: Panel, min_age: int = 60, min_qvol: float = 5e6, qvol_win
 # ---------------------------------------------------------------------------
 # Moteur de rotation (K emplacements indépendants)
 # ---------------------------------------------------------------------------
+TRIGGERS = ("low", "range", "entry", "range_top")
+
+
 @dataclass(frozen=True)
 class RotationParams:
-    mult: float = 3.0          # « a fait 3x » : clôture >= mult × plus bas des low_win derniers jours
-    low_win: int = 30
-    range_win: int = 60        # fourchette pour « en bas de la fourchette »
-    bottom: float = 0.20       # cible : position dans la fourchette <= bottom
+    mult: float = 3.0          # « a fait 3x » : voir ``trigger``
+    low_win: int = 30          # fenêtre du plus bas pour trigger="low"
+    range_win: int = 60        # fourchette pour « en bas de la fourchette » (et trigger "range"/"range_top")
+    bottom: float = 0.20       # une rotation n'a lieu que si une pièce est sous ce seuil de sa fourchette
     k: int = 2                 # nombre de pièces détenues en même temps
-    target: str = "bottom"     # "bottom" (règle de l'auteur), "random" (placebo), "top" (momentum), "none" (détenteur)
+    trigger: str = "low"       # "low" : clôture >= mult × plus bas des low_win j ; "range" : >= mult × plus bas
+                               # des range_win j ; "entry" : >= mult × prix d'achat ; "range_top" : position
+                               # >= 0,9 dans la fourchette et >= mult × plus bas de la fourchette
+    target: str = "bottom"     # pièce achetée à la rotation : "bottom" (auteur), "random" (placebo), "top"
+                               # (inverse, momentum), "none" (détenteur : aucune rotation)
+    entry: str = "bottom"      # achats de départ (et après une sortie forcée) : "bottom", "random", "top"
     cost: float = 0.0075       # coût par échange (vente OU achat) : frais + glissement
     execution: str = "open"    # "open" : ouverture de d+1 ; "next_close" : clôture de d+1
-    delist_haircut: float = 0.0
+    delist_haircut: float = 0.0  # décote si la pièce n'est plus échangée (sortie à la dernière clôture)
+    notice_days: int = 5       # préavis de retrait : vente dès l'annonce (voir delist_notice)
     seed: int = 0
 
 
@@ -231,93 +257,106 @@ class SimResult:
 
 
 def _prepare(panel: Panel, elig: pd.DataFrame, p: RotationParams):
+    if p.trigger not in TRIGGERS:
+        raise ValueError(f"trigger inconnu : {p.trigger}")
     C = panel.close.to_numpy(float)
     O = panel.open.to_numpy(float)
     act = panel.active.to_numpy(bool)
     E = elig.reindex_like(panel.close).fillna(False).to_numpy(bool)
-    low = rolling_low(panel.close, p.low_win).to_numpy(float)
-    with np.errstate(invalid="ignore"):
-        trig = C >= p.mult * low
+    soon = delist_notice(panel, p.notice_days).to_numpy(bool)
     rpos = range_position(panel.close, p.range_win).to_numpy(float)
-    return C, O, act, E, trig & np.isfinite(low), rpos
+    win = p.low_win if p.trigger == "low" else p.range_win
+    low = rolling_low(panel.close, win).to_numpy(float)
+    with np.errstate(invalid="ignore"):
+        trig = (C >= p.mult * low) & np.isfinite(low)
+        if p.trigger == "range_top":
+            trig &= rpos >= 0.9
+    return C, O, act, E, soon, trig, low, rpos
 
 
-def _pick(cands: np.ndarray, rpos_row: np.ndarray, rule: str, rng: np.random.Generator,
-          require_bottom: float | None) -> int | None:
+def _pick(cands: np.ndarray, rpos_row: np.ndarray, rule: str, rng: np.random.Generator) -> int | None:
     if cands.size == 0:
         return None
-    if rule == "random":
-        return int(rng.choice(cands))
     r = rpos_row[cands]
     ok = np.isfinite(r)
     if not ok.any():
         return None
     cands, r = cands[ok], r[ok]
+    if rule == "random":
+        return int(rng.choice(cands))
     if rule == "top":
         return int(cands[np.argmax(r)])
-    j = int(np.argmin(r))                       # "bottom" et "none" (entrée) : plus bas de la fourchette
-    if require_bottom is not None and r[j] > require_bottom:
-        return None
-    return int(cands[j])
+    return int(cands[np.argmin(r)])
 
 
 def simulate_rotation(panel: Panel, elig: pd.DataFrame, p: RotationParams,
                       start: pd.Timestamp | None = None, end: pd.Timestamp | None = None) -> SimResult:
     """Simule la rotation. Décision à la clôture du jour i, exécution au jour i + 1.
 
-    * emplacement vide (départ, ou après une sortie forcée) : achète la pièce éligible non détenue
-      la plus basse dans sa fourchette (règle ``target`` pour "random"/"top") ;
-    * emplacement détenu dont la pièce a « fait mult × » : la vend et achète la cible si elle existe
-      (pour "bottom", seulement si sa position dans la fourchette est <= ``bottom``), sinon garde ;
-    * pièce retirée de la cote le lendemain : sortie forcée à la dernière clôture échangée
-      (moins ``delist_haircut``).
+    * emplacement vide (départ, ou après une sortie forcée) : achète selon ``entry`` (par défaut la
+      pièce éligible non détenue la plus basse dans sa fourchette) ; toutes les variantes (règle,
+      placebo, inverse, détenteur) font donc les mêmes achats de départ ;
+    * emplacement dont la pièce a « fait mult × » (``trigger``) : si une pièce éligible non détenue
+      est sous ``bottom`` dans sa fourchette, on vend et on achète la cible ``target`` (la plus basse,
+      une au hasard, ou la plus haute) ; sinon on garde. Déclenchements identiques pour toutes les cibles ;
+    * retrait de la cote annoncé (``notice_days``) : vente le lendemain de l'annonce ; si la pièce n'est
+      déjà plus échangée le lendemain, sortie à la dernière clôture (moins ``delist_haircut``).
     """
-    C, O, act, E, trig, rpos = _prepare(panel, elig, p)
+    C, O, act, E, soon, trig, low, rpos = _prepare(panel, elig, p)
     dates = panel.dates
     n, m = C.shape
     i0 = 0 if start is None else int(dates.searchsorted(start))
     i1 = n - 1 if end is None else min(n - 1, int(dates.searchsorted(end, side="right")) - 1)
     rng = np.random.default_rng(p.seed)
     slots: list[int | None] = [None] * p.k
+    entry_px = np.full(p.k, np.nan)
     vals = np.full(p.k, 1.0 / p.k)
     rets = np.full(n, np.nan)
     hold = np.full((n, p.k), -1, dtype=int)
     trades = []
     c = p.cost
+
+    def candidates(i, held):
+        return np.array([x for x in np.flatnonzero(E[i]) if x not in held and act[i + 1, x]], dtype=int)
+
     for i in range(i0, i1):
         held = {s for s in slots if s is not None}
-        actions: list[tuple[int, int | None, int | None, str]] = []   # (emplacement, vend, achète, motif)
+        actions: list[list] = []                    # [emplacement, vend, achète, motif]
         for j, s in enumerate(slots):
-            if s is not None and not act[i + 1, s]:
-                actions.append((j, s, None, "retrait"))
+            if s is not None and (soon[i, s] or not act[i + 1, s]):
+                actions.append([j, s, None, "retrait" if not act[i + 1, s] else "retrait annoncé"])
                 held.discard(s)
-        # emplacements vides ou libérés par un retrait : entrée
+        # emplacements vides ou libérés : entrée
         for j in range(p.k):
-            freed = slots[j] is None or any(a[0] == j for a in actions)
-            if not freed:
+            prev = [a for a in actions if a[0] == j]
+            if slots[j] is not None and not prev:
                 continue
-            cands = np.array([x for x in np.flatnonzero(E[i]) if x not in held and act[i + 1, x]], dtype=int)
-            rule = "bottom" if p.target in ("bottom", "none") else p.target
-            b = _pick(cands, rpos[i], rule, rng, None)
-            if b is not None:
-                held.add(b)
-                prev = [a for a in actions if a[0] == j]
-                if prev:
-                    actions[actions.index(prev[0])] = (j, prev[0][1], b, "retrait")
-                else:
-                    actions.append((j, None, b, "entrée"))
+            b = _pick(candidates(i, held), rpos[i], p.entry, rng)
+            if b is None:
+                continue
+            held.add(b)
+            if prev:
+                prev[0][2] = b
+            else:
+                actions.append([j, None, b, "entrée"])
         # rotations
         if p.target != "none":
             for j, s in enumerate(slots):
-                if s is None or any(a[0] == j for a in actions) or not trig[i, s]:
+                if s is None or any(a[0] == j for a in actions):
                     continue
-                cands = np.array([x for x in np.flatnonzero(E[i]) if x not in held and act[i + 1, x]], dtype=int)
-                b = _pick(cands, rpos[i], p.target, rng, p.bottom if p.target == "bottom" else None)
+                fired = (C[i, s] >= p.mult * entry_px[j]) if p.trigger == "entry" else trig[i, s]
+                if not fired:
+                    continue
+                cands = candidates(i, held)
+                r = rpos[i, cands] if cands.size else np.array([])
+                if not (r.size and np.nanmin(np.where(np.isfinite(r), r, np.inf)) <= p.bottom):
+                    continue                        # pas de pièce en bas de fourchette : on garde
+                b = _pick(cands, rpos[i], p.target, rng)
                 if b is None:
                     continue
                 held.discard(s)
                 held.add(b)
-                actions.append((j, s, b, "rotation"))
+                actions.append([j, s, b, "rotation"])
         # exécution au jour i + 1 et valorisation à la clôture de i + 1
         v0 = vals.sum()
         acted = {a[0] for a in actions}
@@ -328,8 +367,8 @@ def simulate_rotation(panel: Panel, elig: pd.DataFrame, p: RotationParams,
         for j, sell, buy, why in actions:
             v = vals[j]
             if sell is not None:
-                if why == "retrait":
-                    v *= (1.0 - p.delist_haircut) * (1.0 - c)       # vendu à la dernière clôture échangée
+                if not act[i + 1, sell]:
+                    v *= (1.0 - p.delist_haircut) * (1.0 - c)       # plus échangée : dernière clôture
                 elif p.execution == "open":
                     v *= O[i + 1, sell] / C[i, sell] * (1.0 - c)
                 else:
@@ -338,70 +377,128 @@ def simulate_rotation(panel: Panel, elig: pd.DataFrame, p: RotationParams,
                 v *= 1.0 - c
                 if p.execution == "open":
                     v *= C[i + 1, buy] / O[i + 1, buy]
+                    px = O[i + 1, buy]
+                else:
+                    px = C[i + 1, buy]
+                trades.append({"date": dates[i + 1], "slot": j,
+                               "sell": None if sell is None else panel.symbols[sell], "buy": panel.symbols[buy],
+                               "why": why,
+                               "sell_vs_low": float(C[i, sell] / low[i, sell]) if sell is not None and np.isfinite(low[i, sell]) else np.nan,
+                               "sell_vs_entry": float(C[i, sell] / entry_px[j]) if sell is not None else np.nan,
+                               "buy_rpos": float(rpos[i, buy])})
                 slots[j] = buy
+                entry_px[j] = px
             else:
+                trades.append({"date": dates[i + 1], "slot": j, "sell": panel.symbols[sell], "buy": None, "why": why,
+                               "sell_vs_low": np.nan, "sell_vs_entry": float(C[i, sell] / entry_px[j]), "buy_rpos": np.nan})
                 slots[j] = None
+                entry_px[j] = np.nan
             vals[j] = v
-            trades.append({"date": dates[i + 1], "slot": j, "sell": None if sell is None else panel.symbols[sell],
-                           "buy": None if buy is None else panel.symbols[buy], "why": why,
-                           "sell_mult": (float(C[i, sell] / np.nanmin(C[max(0, i - p.low_win + 1): i + 1, sell]))
-                                         if sell is not None else np.nan),
-                           "buy_rpos": float(rpos[i, buy]) if buy is not None else np.nan})
         rets[i + 1] = vals.sum() / v0 - 1.0
         hold[i + 1] = [(-1 if s is None else s) for s in slots]
     idx = dates[i0 + 1: i1 + 1]
     r = pd.Series(rets[i0 + 1: i1 + 1], index=idx, name="ret")
     h = pd.DataFrame(hold[i0 + 1: i1 + 1], index=idx, columns=[f"slot{j}" for j in range(p.k)])
     h = h.apply(lambda col: col.map(lambda x: None if x < 0 else panel.symbols[x]))
-    return SimResult(r, pd.DataFrame(trades), h)
+    cols = ["date", "slot", "sell", "buy", "why", "sell_vs_low", "sell_vs_entry", "buy_rpos"]
+    return SimResult(r, pd.DataFrame(trades, columns=cols), h)
 
 
-def simulate_basket(panel: Panel, elig: pd.DataFrame, cost: float = 0.0075, rebalance_days: int = 30,
-                    delist_haircut: float = 0.0, start: pd.Timestamp | None = None,
-                    end: pd.Timestamp | None = None) -> SimResult:
-    """Panier équipondéré de toutes les pièces éligibles, rééquilibré tous les ``rebalance_days``
-    jours (décision à la clôture de d, exécution ≈ clôture de d) ; coût sur la rotation du panier.
-    Une pièce retirée de la cote sort à sa dernière clôture échangée, le produit reste en liquidités
-    jusqu'au rééquilibrage suivant."""
-    C = panel.close.to_numpy(float)
-    act = panel.active.to_numpy(bool)
-    E = elig.reindex_like(panel.close).fillna(False).to_numpy(bool)
-    dates = panel.dates
+def _weights_tranche(C, act, soon, E, pick, i0, i1, offset, rebalance_days, cost, haircut, delay):
+    """Une tranche d'un portefeuille à poids : rééquilibrage aux jours i0 + offset + k·rebalance_days
+    (et achat initial en i0) vers les poids ``pick(i)`` ; ``delay`` = 1 : les nouveaux poids ne
+    s'appliquent qu'après le mouvement du lendemain (exécution à la clôture de J+1)."""
     n, m = C.shape
-    i0 = 0 if start is None else int(dates.searchsorted(start))
-    i1 = n - 1 if end is None else min(n - 1, int(dates.searchsorted(end, side="right")) - 1)
     w = np.zeros(m)
     cash = 1.0
-    rets = np.full(n, np.nan)
-    turn = []
-    for k, i in enumerate(range(i0, i1)):
-        v_before = w.sum() + cash
-        # retraits du lendemain
-        gone = (w > 0) & ~act[i + 1]
+    eq = np.full(n, np.nan)
+    eq[i0] = 1.0
+    for i in range(i0, i1):
+        gone = (w > 0) & (soon[i] | ~act[i + 1])
         if gone.any():
-            cash += (w[gone] * (1 - delist_haircut) * (1 - cost)).sum()
+            keep = np.where(act[i + 1], 1.0, 1.0 - haircut)
+            cash += (w[gone] * keep[gone] * (1 - cost)).sum()
             w[gone] = 0.0
-        if k % rebalance_days == 0:
-            e = np.flatnonzero(E[i] & act[i + 1])
+        reb = i == i0 or (i - i0 - offset) % rebalance_days == 0 and i - i0 >= offset
+        tgt = None
+        if reb:
+            sel = pick(i)
             tot = w.sum() + cash
             tgt = np.zeros(m)
-            if e.size:
-                tgt[e] = tot / e.size
-            tv = np.abs(tgt - w).sum() + abs((0.0 if e.size else tot) - cash)
+            if sel.size:
+                tgt[sel] = tot / sel.size
+        if tgt is not None and not delay:
             fee = cost * np.abs(tgt - w).sum()
-            turn.append({"date": dates[i], "n": int(e.size), "turnover": float(tv / tot) if tot else 0.0})
-            if e.size:
-                w = tgt * (1 - fee / tot)
-                cash = 0.0
+            if tgt.sum() > 0:
+                w, cash = tgt * (1 - fee / tgt.sum()), 0.0
             else:
-                w = np.zeros(m)
-                cash = tot - fee
+                w, cash = tgt, w.sum() + cash - fee
         with np.errstate(invalid="ignore", divide="ignore"):
             g = np.where(w > 0, C[i + 1] / C[i], 1.0)
         w = w * np.nan_to_num(g, nan=1.0)
-        rets[i + 1] = (w.sum() + cash) / v_before - 1.0
-    idx = dates[i0 + 1: i1 + 1]
-    return SimResult(pd.Series(rets[i0 + 1: i1 + 1], index=idx, name="ret"), pd.DataFrame(turn), pd.DataFrame())
+        if tgt is not None and delay:
+            tot = w.sum() + cash
+            sel_w = tgt / max(tgt.sum(), 1e-300) * tot if tgt.sum() > 0 else tgt
+            fee = cost * np.abs(sel_w - w).sum()
+            if sel_w.sum() > 0:
+                w, cash = sel_w * (1 - fee / sel_w.sum()), 0.0
+            else:
+                w, cash = sel_w, tot - fee
+        eq[i + 1] = w.sum() + cash
+    return eq
+
+
+def simulate_weights(panel: Panel, elig: pd.DataFrame, pick_fn, cost: float = 0.0075, rebalance_days: int = 30,
+                     tranches: int = 1, delist_haircut: float = 0.0, notice_days: int = 5, execution: str = "open",
+                     start: pd.Timestamp | None = None, end: pd.Timestamp | None = None) -> SimResult:
+    """Portefeuille équipondéré sur les pièces choisies par ``pick_fn(i, E_row, ctx)`` (indices),
+    rééquilibré tous les ``rebalance_days`` jours. ``tranches`` > 1 : le capital est réparti en
+    tranches rééquilibrées à des jours décalés (la date de rééquilibrage ne favorise personne)."""
+    C = panel.close.to_numpy(float)
+    act = panel.active.to_numpy(bool)
+    E = elig.reindex_like(panel.close).fillna(False).to_numpy(bool)
+    soon = delist_notice(panel, notice_days).to_numpy(bool)
+    dates = panel.dates
+    n = C.shape[0]
+    i0 = 0 if start is None else int(dates.searchsorted(start))
+    i1 = n - 1 if end is None else min(n - 1, int(dates.searchsorted(end, side="right")) - 1)
+    pick = lambda i: pick_fn(i, np.flatnonzero(E[i] & act[i + 1] & ~soon[i]))  # noqa: E731
+    offs = [int(round(o * rebalance_days / tranches)) for o in range(tranches)]
+    eq = sum(_weights_tranche(C, act, soon, E, pick, i0, i1, o, rebalance_days, cost, delist_haircut,
+                              1 if execution == "next_close" else 0) for o in offs) / len(offs)
+    r = pd.Series(eq[i0 + 1: i1 + 1] / eq[i0: i1] - 1.0, index=dates[i0 + 1: i1 + 1], name="ret")
+    return SimResult(r, pd.DataFrame(), pd.DataFrame())
+
+
+def simulate_basket(panel: Panel, elig: pd.DataFrame, cost: float = 0.0075, rebalance_days: int = 30,
+                    tranches: int = 30, delist_haircut: float = 0.0, notice_days: int = 5, execution: str = "open",
+                    start: pd.Timestamp | None = None, end: pd.Timestamp | None = None) -> SimResult:
+    """Panier équipondéré de toutes les pièces éligibles, rééquilibré tous les ``rebalance_days``
+    jours, en ``tranches`` tranches décalées (par défaut une par jour du cycle)."""
+    return simulate_weights(panel, elig, lambda i, cands: cands, cost, rebalance_days, tranches,
+                            delist_haircut, notice_days, execution, start, end)
+
+
+def simulate_periodic(panel: Panel, elig: pd.DataFrame, k: int, every: int, rule: str = "bottom",
+                      range_win: int = 60, cost: float = 0.0075, seed: int = 0, tranches: int = 1,
+                      start: pd.Timestamp | None = None, end: pd.Timestamp | None = None) -> SimResult:
+    """Rotation systématique : tous les ``every`` jours, détenir à parts égales les ``k`` pièces
+    éligibles les plus basses (``rule`` = "bottom"), les plus hautes ("top") ou prises au hasard
+    ("random") dans leur fourchette de ``range_win`` jours."""
+    rpos = range_position(panel.close, range_win).to_numpy(float)
+    rng = np.random.default_rng(seed)
+
+    def pick(i, cands):
+        r = rpos[i, cands]
+        ok = np.isfinite(r)
+        cands, r = cands[ok], r[ok]
+        if cands.size == 0:
+            return cands
+        if rule == "random":
+            return rng.choice(cands, size=min(k, cands.size), replace=False)
+        order = np.argsort(r if rule == "bottom" else -r, kind="stable")
+        return cands[order[:k]]
+    return simulate_weights(panel, elig, pick, cost, every, tranches, start=start, end=end)
 
 
 # ---------------------------------------------------------------------------
@@ -465,22 +562,24 @@ def deflated_sharpe(r_best: np.ndarray, sr_trials: np.ndarray) -> dict:
 
 def forward_stats(panel: Panel, horizon: int) -> dict[str, pd.DataFrame]:
     """Pour chaque (jour d, pièce) : rendement de la clôture de d à la clôture de d + h, plus haut et
-    plus bas atteints (clôtures) sur (d, d + h]. Une pièce retirée de la cote est figée à sa dernière
-    clôture échangée."""
+    plus bas atteints (clôtures) sur (d, d + h], et plus forte baisse depuis un sommet (« dd ») sur
+    [d, d + h]. Une pièce retirée de la cote est figée à sa dernière clôture échangée."""
     c = panel.close.where(panel.active).ffill()     # figé à la dernière clôture échangée après un retrait
-    fut = [c.shift(-k) for k in range(1, horizon + 1)]
-    stack = np.stack([f.to_numpy(float) for f in fut])
     base = c.to_numpy(float)
+    stack = np.stack([c.shift(-k).to_numpy(float) for k in range(1, horizon + 1)])
     with np.errstate(invalid="ignore", divide="ignore"), warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)      # pièces pas encore cotées : tranches vides
         ret = stack[-1] / base - 1
         mx = np.nanmax(stack, axis=0) / base - 1
         mn = np.nanmin(stack, axis=0) / base - 1
+        path = np.concatenate([base[None], stack])
+        peak = np.fmax.accumulate(path, axis=0)
+        dd = np.nanmin(path / peak - 1, axis=0)
     # horizon incomplet en fin d'échantillon : NaN
     incomplete = np.zeros_like(base, dtype=bool)
     incomplete[-horizon:] = True
     mk = lambda a: pd.DataFrame(np.where(incomplete, np.nan, a), index=c.index, columns=c.columns)  # noqa: E731
-    return {"ret": mk(ret), "max": mk(mx), "min": mk(mn)}
+    return {"ret": mk(ret), "max": mk(mx), "min": mk(mn), "dd": mk(dd)}
 
 
 def cross_sectional_ic(signal: pd.DataFrame, fwd: pd.DataFrame, mask: pd.DataFrame, min_n: int = 6) -> pd.Series:

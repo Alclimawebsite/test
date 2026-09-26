@@ -68,21 +68,75 @@ def test_costs_charged_on_each_swap():
     assert float((1 + res.returns).prod()) == pytest.approx(4.0 * (1 - 0.01) ** 3, rel=1e-9)
 
 
-def test_delisted_coin_is_sold_at_last_traded_close():
+def _delist_panel():
     n = 100
     a = np.full(n, 10.0)
     a[20] = 12.0
     a[70:] = np.nan                                  # retiré de la cote après le jour 69
     b = np.full(n, 2.0)
     b[20] = 3.0
-    panel = mc.build_panel(_frames({"AUSDT": a, "BUSDT": b}))
+    return mc.build_panel(_frames({"AUSDT": a, "BUSDT": b}))
+
+
+def test_delisted_coin_is_sold_at_last_traded_close_without_notice():
+    panel = _delist_panel()
     assert not panel.active["AUSDT"].iloc[75]
-    el = mc.eligibility(panel, min_age=1, min_qvol=0)
-    p = mc.RotationParams(k=2, cost=0.0, delist_haircut=0.5)
+    el = mc.eligibility(panel, min_age=1, min_qvol=0, notice_days=0)
+    p = mc.RotationParams(k=2, cost=0.0, delist_haircut=0.5, notice_days=0)
     res = mc.simulate_rotation(panel, el, p, start=panel.dates[30])
     assert list(res.trades["why"]) == ["entrée", "entrée", "retrait"]
     assert res.trades.iloc[2]["date"] == panel.dates[70]
     assert float((1 + res.returns).prod()) == pytest.approx(0.5 * 0.5 + 0.5, rel=1e-9)
+
+
+def test_announced_delisting_sells_on_notice_without_haircut():
+    panel = _delist_panel()
+    soon = mc.delist_notice(panel, 5)["AUSDT"]
+    assert soon.iloc[65:70].all() and not soon.iloc[64] and not soon.iloc[70:].any()
+    el = mc.eligibility(panel, min_age=1, min_qvol=0, notice_days=5)
+    p = mc.RotationParams(k=2, cost=0.0, delist_haircut=0.5, notice_days=5)
+    res = mc.simulate_rotation(panel, el, p, start=panel.dates[30])
+    assert list(res.trades["why"]) == ["entrée", "entrée", "retrait annoncé"]
+    assert res.trades.iloc[2]["date"] == panel.dates[66]           # annonce connue au jour 65, vente le 66
+    assert float((1 + res.returns).prod()) == pytest.approx(1.0, rel=1e-9)
+
+
+def test_all_targets_share_initial_entries_and_triggers():
+    panel = _random_panel(n_sym=8, n_days=400, seed=3, vol=0.10)
+    el = mc.eligibility(panel, min_age=60, min_qvol=0)
+    base = mc.RotationParams(mult=1.8, cost=0.0)
+    runs = {t: mc.simulate_rotation(panel, el, mc.with_params(base, target=t), start=panel.dates[60])
+            for t in ("bottom", "random", "top", "none")}
+    first = {t: sorted(r.trades.loc[r.trades["why"] == "entrée", "buy"].head(2)) for t, r in runs.items()}
+    assert len({tuple(v) for v in first.values()}) == 1
+    d_bottom = runs["bottom"].trades.loc[runs["bottom"].trades["why"] == "rotation", "date"].iloc[0]
+    d_top = runs["top"].trades.loc[runs["top"].trades["why"] == "rotation", "date"].iloc[0]
+    assert d_bottom == d_top                                        # même premier déclenchement
+
+
+def test_entry_trigger_sells_at_multiple_of_purchase_price():
+    n = 150
+    a = np.r_[np.full(40, 10.0), np.full(50, 2.5), np.linspace(2.5, 8.0, 60)]
+    b = np.r_[np.full(60, 5.0), np.linspace(4.0, 1.0, 90)]      # toujours au plus bas de sa fourchette
+    panel = mc.build_panel(_frames({"AUSDT": a, "BUSDT": b}))
+    el = mc.eligibility(panel, min_age=1, min_qvol=0)
+    p = mc.RotationParams(mult=3.0, trigger="entry", k=1, cost=0.0)
+    res = mc.simulate_rotation(panel, el, p, start=panel.dates[60])
+    rot = res.trades[res.trades["why"] == "rotation"].iloc[0]
+    assert rot["sell"] == "AUSDT" and rot["sell_vs_entry"] >= 3.0
+    i = panel.dates.get_loc(rot["date"]) - 1
+    assert panel.close["AUSDT"].iloc[i - 1] < 3 * 2.5 <= panel.close["AUSDT"].iloc[i]
+
+
+def test_periodic_bottom_holds_lowest_in_range():
+    panel = _random_panel(n_sym=6, n_days=300, seed=5)
+    el = mc.eligibility(panel, min_age=60, min_qvol=0)
+    r = mc.simulate_periodic(panel, el, k=1, every=1, cost=0.0, start=panel.dates[100])
+    rp = mc.range_position(panel.close, 60)
+    i = panel.dates.get_loc(panel.dates[150])
+    j = int(np.nanargmin(rp.iloc[i].to_numpy()))
+    expected = panel.close.iloc[i + 1, j] / panel.close.iloc[i, j] - 1
+    assert r.returns.iloc[i - 100] == pytest.approx(expected, rel=1e-9)
 
 
 def test_basket_matches_equal_weight_without_costs():
@@ -139,6 +193,9 @@ def test_forward_stats_freeze_after_delisting():
     fw = mc.forward_stats(panel, 2)
     assert fw["ret"]["AUSDT"].iloc[1] == pytest.approx(1.0)      # 2 -> figé à 4
     assert fw["max"]["AUSDT"].iloc[0] == pytest.approx(3.0)
+    c = pd.DataFrame({"AUSDT": [1.0, 4.0, 1.0, 2.0]})
+    fw2 = mc.forward_stats(mc.build_panel(_frames({"AUSDT": c["AUSDT"].to_numpy()})), 3)
+    assert fw2["dd"]["AUSDT"].iloc[0] == pytest.approx(-0.75)          # sommet 4 puis 1
 
 
 def test_newey_west_t_reduces_to_iid_without_lags():

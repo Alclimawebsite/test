@@ -8,7 +8,7 @@ Données publiques, lecture seule (voir ``tradebot.memecoins``) : les 55 perpét
 « Meme » par Binance, retirés de la cote compris, en bougies quotidiennes. Sorties dans
 ``reports/memecoins/``.
 
-    python scripts/memecoin_rotation.py [--refresh] [--placebo 500] [--boot 2000]
+    python scripts/memecoin_rotation.py [--refresh] [--placebo 500] [--placebo-formes 100] [--boot 2000]
 """
 
 from __future__ import annotations
@@ -35,8 +35,8 @@ A_PRIORI = mc.RotationParams()          # règle de l'auteur, fixée avant tout 
 MIN_ELIGIBLE = 8                         # début de l'étude : au moins 8 pièces éligibles
 HORIZONS = (30, 60)
 C_BLUE, C_ORANGE, C_AQUA, C_YELLOW, C_VIOLET, C_GREY = "#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#4a3aa7", "#8a94a3"
-GRID_SPACE = {"mult": (2.0, 3.0, 4.0), "low_win": (14, 30), "range_win": (30, 60, 90),
-              "bottom": (0.1, 0.2, 0.3), "k": (1, 2, 3)}
+GRID_SPACE = {"trigger": mc.TRIGGERS, "mult": (2.0, 3.0, 4.0), "range_win": (30, 60, 90),
+              "bottom": (0.1, 0.2, 0.3), "k": (1, 2, 3, 5)}
 
 
 def fr(x, d: int = 1, signed: bool = False, pct: bool = False) -> str:
@@ -61,6 +61,11 @@ def day(d) -> str:
 # ---------------------------------------------------------------------------
 # 1. États A (« vient de faire 3x ») et B (« bas de fourchette ») : que se passe-t-il ensuite ?
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# 1. États A (« vient de faire 3x ») et B (« bas de fourchette ») : que se passe-t-il ensuite ?
+# ---------------------------------------------------------------------------
 def states(panel: mc.Panel, el: pd.DataFrame, p: mc.RotationParams) -> dict[str, pd.DataFrame]:
     C = panel.close
     did = (C >= p.mult * mc.rolling_low(C, p.low_win)) & el
@@ -68,8 +73,13 @@ def states(panel: mc.Panel, el: pd.DataFrame, p: mc.RotationParams) -> dict[str,
     return {"A": did & ~did.shift(1, fill_value=False), "B": bot & ~bot.shift(1, fill_value=False), "tous": el}
 
 
+def month_of(dates) -> np.ndarray:
+    return np.asarray(dates, dtype="datetime64[ns]").astype("datetime64[M]").astype(int)
+
+
 def cluster_boot(vals: np.ndarray, groups: np.ndarray, stat, n_boot: int, seed: int = 0) -> tuple[float, float]:
-    """IC 95 % par bootstrap en tirant des semaines entières (événements d'une même semaine corrélés)."""
+    """IC 95 % par bootstrap en tirant des mois entiers (événements d'un même mois, et fenêtres futures
+    de 30 à 60 jours qui se chevauchent, sont corrélés)."""
     rng = np.random.default_rng(seed)
     ug = np.unique(groups)
     by = {g: vals[groups == g] for g in ug}
@@ -80,51 +90,71 @@ def cluster_boot(vals: np.ndarray, groups: np.ndarray, stat, n_boot: int, seed: 
     return float(np.nanpercentile(out, 2.5)), float(np.nanpercentile(out, 97.5))
 
 
+def _event_values(panel, mask, start, fw, keys):
+    after = (panel.dates >= start)[:, None]
+    m = mask.to_numpy() & after
+    vals = [fw[k].to_numpy()[m] for k in keys]
+    grp = month_of(np.broadcast_to(panel.dates.to_numpy()[:, None], m.shape)[m])
+    ok = np.all([np.isfinite(v) for v in vals], axis=0)
+    return [v[ok] for v in vals], grp[ok]
+
+
 def event_study(panel, el, start, n_boot) -> pd.DataFrame:
     st = states(panel, el, A_PRIORI)
-    after = (panel.dates >= start)[:, None]
     rows = []
     for h in HORIZONS:
         fw = mc.forward_stats(panel, h)
         for key, lab in (("A", "A : vient de faire 3x"), ("B", "B : bas de fourchette"), ("tous", "toute pièce éligible, tout jour")):
-            m = st[key].to_numpy() & after
-            r, mx, mn = (fw[k].to_numpy()[m] for k in ("ret", "max", "min"))
-            wk = np.broadcast_to(panel.dates.to_numpy()[:, None], m.shape)[m].astype("datetime64[W]").astype(int)
-            ok = np.isfinite(r) & np.isfinite(mx) & np.isfinite(mn)
-            r, mx, mn, wk = r[ok], mx[ok], mn[ok], wk[ok]
-            row = {"horizon_j": h, "etat": lab, "n": int(r.size), "semaines": int(np.unique(wk).size),
+            (r, mx, mn), grp = _event_values(panel, st[key], start, fw, ("ret", "max", "min"))
+            row = {"horizon_j": h, "etat": lab, "n": int(r.size), "mois": int(np.unique(grp).size),
                    "ret_median": float(np.median(r)), "ret_moyen": float(r.mean()),
                    "p_double": float((mx >= 1.0).mean()), "p_triple": float((mx >= 2.0).mean()),
                    "p_moins30": float((mn <= -0.3).mean()), "p_moins70": float((mn <= -0.7).mean()),
                    "max_median": float(np.median(mx)), "min_median": float(np.median(mn))}
             if key != "tous":
-                row["ret_median_lo"], row["ret_median_hi"] = cluster_boot(r, wk, np.median, n_boot)
-                row["p_triple_lo"], row["p_triple_hi"] = cluster_boot((mx >= 2.0).astype(float), wk, np.mean, n_boot)
-                row["p_moins30_lo"], row["p_moins30_hi"] = cluster_boot((mn <= -0.3).astype(float), wk, np.mean, n_boot)
+                row["ret_median_lo"], row["ret_median_hi"] = cluster_boot(r, grp, np.median, n_boot)
+                row["p_triple_lo"], row["p_triple_hi"] = cluster_boot((mx >= 2.0).astype(float), grp, np.mean, n_boot)
+                row["p_moins30_lo"], row["p_moins30_hi"] = cluster_boot((mn <= -0.3).astype(float), grp, np.mean, n_boot)
             rows.append(row)
     return pd.DataFrame(rows)
 
 
+def drawdown_after_A(panel, el, start) -> pd.DataFrame:
+    """Plus forte baisse depuis un sommet (et non depuis le jour du 3x), sur 60, 120 et 180 jours :
+    la prémisse de l'auteur « un repli typique de −70 % » se lit ainsi."""
+    st = states(panel, el, A_PRIORI)
+    rows = []
+    for h in (60, 120, 180):
+        fw = mc.forward_stats(panel, h)
+        for key, lab in (("A", "A : vient de faire 3x"), ("tous", "toute pièce éligible, tout jour")):
+            (dd,), grp = _event_values(panel, st[key], start, fw, ("dd",))
+            rows.append({"horizon_j": h, "etat": lab, "n": int(dd.size), "dd_median": float(np.median(dd)),
+                         "p_dd70": float((dd <= -0.7).mean()), "p_dd50": float((dd <= -0.5).mean())})
+    return pd.DataFrame(rows)
+
+
 def paired_rotations(panel, el, start, n_boot, cost: float) -> pd.DataFrame:
-    """Chaque fois qu'une pièce A fait 3x : B = la pièce éligible la plus basse dans sa fourchette
-    (si <= 20 %). Compare le rendement de B et de A sur h jours (log), coûts de la rotation déduits,
-    et le compare au choix d'une pièce éligible quelconque (moyenne de toutes les autres)."""
+    """Chaque fois qu'une pièce A fait 3x et qu'une pièce éligible est sous 20 % de sa fourchette :
+    B = la plus basse. Rapport de richesse (1 + r_B)/(1 + r_A) × (1 − coût)² − 1 sur h jours : ce que
+    rapporte la rotation par rapport à garder A. Même calcul pour une pièce éligible quelconque
+    (moyenne de toutes les autres)."""
     p = A_PRIORI
     C = panel.close
     st = states(panel, el, p)["A"]
-    rp = mc.range_position(C, p.range_win)
+    rp = mc.range_position(C, p.range_win).to_numpy()
+    E = el.to_numpy()
+    k2 = (1 - cost) ** 2
     rows = []
     for h in HORIZONS:
-        fw = mc.forward_stats(panel, h)["ret"]
+        fw = mc.forward_stats(panel, h)["ret"].to_numpy()
         recs = []
         for d, a in zip(*np.nonzero(st.to_numpy())):
             date = panel.dates[d]
-            if date < start or not np.isfinite(fw.iat[d, a]):
+            if date < start or not np.isfinite(fw[d, a]):
                 continue
-            cand = np.flatnonzero(el.to_numpy()[d])
+            cand = np.flatnonzero(E[d])
             cand = cand[cand != a]
-            r = rp.to_numpy()[d, cand]
-            f = fw.to_numpy()[d, cand]
+            r, f = rp[d, cand], fw[d, cand]
             ok = np.isfinite(r) & np.isfinite(f)
             if not ok.any():
                 continue
@@ -132,19 +162,18 @@ def paired_rotations(panel, el, start, n_boot, cost: float) -> pd.DataFrame:
             j = int(np.argmin(r))
             if r[j] > p.bottom:
                 continue
-            la = math.log1p(fw.iat[d, a])
+            ga = 1 + fw[d, a]
             recs.append({"date": date, "A": panel.symbols[a], "B": panel.symbols[cand[j]],
-                         "diff_B": math.log1p(f[j]) - la + 2 * math.log1p(-cost),
-                         "diff_autre": float(np.mean(np.log1p(f))) - la + 2 * math.log1p(-cost)})
+                         "rot_B": (1 + f[j]) / ga * k2 - 1, "rot_autre": float(np.mean((1 + f) / ga)) * k2 - 1})
         df = pd.DataFrame(recs)
         if df.empty:
             continue
-        wk = df["date"].to_numpy().astype("datetime64[W]").astype(int)
-        for col, lab in (("diff_B", "rotation vers B (bas de fourchette)"), ("diff_autre", "rotation vers une pièce quelconque")):
+        grp = month_of(df["date"])
+        for col, lab in (("rot_B", "rotation vers B (bas de fourchette)"), ("rot_autre", "rotation vers une pièce quelconque")):
             v = df[col].to_numpy()
-            lo, hi = cluster_boot(v, wk, np.mean, n_boot)
-            rows.append({"horizon_j": h, "choix": lab, "n": len(v), "semaines": int(np.unique(wk).size),
-                         "gain_log_moyen": float(v.mean()), "ic_lo": lo, "ic_hi": hi,
+            lo, hi = cluster_boot(v, grp, np.mean, n_boot)
+            rows.append({"horizon_j": h, "choix": lab, "n": len(v), "mois": int(np.unique(grp).size),
+                         "gain_moyen": float(v.mean()), "ic_lo": lo, "ic_hi": hi,
                          "gain_median": float(np.median(v)), "p_gagne": float((v > 0).mean())})
         if h == 60:
             df.to_csv(OUT / "rotations_appariees_60j.csv", index=False)
@@ -176,18 +205,20 @@ def n_rot(res: mc.SimResult) -> int:
     return int((res.trades["why"] == "rotation").sum()) if len(res.trades) else 0
 
 
+def mult(res: mc.SimResult) -> float:
+    return float((1 + res.returns.dropna()).prod())
+
+
 def main_runs(panel, el, start, n_placebo):
     p = A_PRIORI
     runs = {
-        "rotation (règle de l'auteur)": mc.simulate_rotation(panel, el, p, start=start),
+        "rotation (règle testée)": mc.simulate_rotation(panel, el, p, start=start),
         "détenteur (mêmes achats de départ, aucune rotation)": mc.simulate_rotation(panel, el, mc.with_params(p, target="none"), start=start),
-        "rotation inverse (vers le haut de fourchette)": mc.simulate_rotation(panel, el, mc.with_params(p, target="top"), start=start),
-        "panier équipondéré (rééquilibré tous les 30 j)": mc.simulate_basket(panel, el, cost=p.cost, start=start),
+        "rotation inverse (mêmes achats et déclenchements, cible en haut de fourchette)": mc.simulate_rotation(panel, el, mc.with_params(p, target="top"), start=start),
+        "panier équipondéré (30 tranches, rééquilibrage mensuel)": mc.simulate_basket(panel, el, cost=p.cost, start=start),
     }
-    plac = []
-    for s in range(n_placebo):
-        r = mc.simulate_rotation(panel, el, mc.with_params(p, target="random", seed=s), start=start)
-        plac.append(r.returns)
+    plac = [mc.simulate_rotation(panel, el, mc.with_params(p, target="random", seed=s), start=start).returns
+            for s in range(n_placebo)]
     return runs, pd.concat(plac, axis=1)
 
 
@@ -200,68 +231,157 @@ def perf_table(runs: dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def rolling_starts(panel, el, start, end, months=12) -> pd.DataFrame:
-    """Départs mensuels, 12 mois de détention : la rotation bat-elle le détenteur / le panier ?"""
-    p = A_PRIORI
-    rows = []
+def windows(start, end, months=12, step=30):
     s = start
     while s + pd.Timedelta(days=30 * months) <= end:
-        e = s + pd.Timedelta(days=30 * months)
-        f = {}
-        for lab, fn in (("rotation", lambda: mc.simulate_rotation(panel, el, p, start=s, end=e)),
-                        ("detenteur", lambda: mc.simulate_rotation(panel, el, mc.with_params(p, target="none"), start=s, end=e)),
-                        ("inverse", lambda: mc.simulate_rotation(panel, el, mc.with_params(p, target="top"), start=s, end=e)),
-                        ("panier", lambda: mc.simulate_basket(panel, el, cost=p.cost, start=s, end=e))):
-            res = fn()
-            f[lab] = float((1 + res.returns.dropna()).prod())
-            if lab == "rotation":
-                f["rotations"] = n_rot(res)
-        rows.append({"debut": s, "fin": e, **f})
-        s = s + pd.Timedelta(days=30)
+        yield s, s + pd.Timedelta(days=30 * months)
+        s = s + pd.Timedelta(days=step)
+
+
+def wlt(a: np.ndarray, b: np.ndarray, tol: float = 1e-9) -> tuple[int, int, int]:
+    """Victoires, défaites, égalités de a contre b (égalité : même multiple à 1e-9 près)."""
+    d = np.log(a) - np.log(b)
+    return int((d > tol).sum()), int((d < -tol).sum()), int((np.abs(d) <= tol).sum())
+
+
+def sign_test_p(w: int, l: int) -> float:
+    from scipy.stats import binomtest
+    return float(binomtest(w, w + l, 0.5).pvalue) if w + l else float("nan")
+
+
+def rolling_starts(panel, el, start, end, p=A_PRIORI) -> pd.DataFrame:
+    """Départs mensuels, 12 mois de détention : rotation, détenteur, rotation inverse, panier."""
+    rows = []
+    for s, e in windows(start, end):
+        rot = mc.simulate_rotation(panel, el, p, start=s, end=e)
+        rows.append({"debut": s, "fin": e, "rotation": mult(rot), "rotations": n_rot(rot),
+                     "detenteur": mult(mc.simulate_rotation(panel, el, mc.with_params(p, target="none"), start=s, end=e)),
+                     "inverse": mult(mc.simulate_rotation(panel, el, mc.with_params(p, target="top"), start=s, end=e)),
+                     "panier": mult(mc.simulate_basket(panel, el, cost=p.cost, start=s, end=e))})
     return pd.DataFrame(rows)
 
 
+FORMS = [("F0", "3 × le plus bas des 30 derniers jours", dict(trigger="low", mult=3.0)),
+         ("F1", "3 × le plus bas de la fourchette de 60 jours", dict(trigger="range", mult=3.0)),
+         ("F2", "3 × le prix d'achat", dict(trigger="entry", mult=3.0)),
+         ("F3", "haut de fourchette (≥ 90 %) et 2 × son plus bas", dict(trigger="range_top", mult=2.0))]
+
+
+def formalisations(panel, universes: dict, start, end, n_plac: int) -> pd.DataFrame:
+    """Quatre lectures raisonnables de « vendre en haut de fourchette » × deux univers × 2 ou 5 pièces :
+    période entière, départs glissants de 12 mois, placebos (mêmes achats et déclenchements, cible au
+    hasard)."""
+    rows = []
+    for uname, el in universes.items():
+        for fid, flab, kw in FORMS:
+            for k in (2, 5):
+                p = mc.with_params(A_PRIORI, k=k, **kw)
+                rot = mc.simulate_rotation(panel, el, p, start=start)
+                hold = mc.simulate_rotation(panel, el, mc.with_params(p, target="none"), start=start)
+                plac = np.array([mult(mc.simulate_rotation(panel, el, mc.with_params(p, target="random", seed=s), start=start))
+                                 for s in range(n_plac)])
+                ra, ha, nr = [], [], []
+                for s, e in windows(start, end):
+                    r = mc.simulate_rotation(panel, el, p, start=s, end=e)
+                    ra.append(mult(r))
+                    nr.append(n_rot(r))
+                    ha.append(mult(mc.simulate_rotation(panel, el, mc.with_params(p, target="none"), start=s, end=e)))
+                w, l, t = wlt(np.array(ra), np.array(ha))
+                rows.append({"univers": uname, "forme": fid, "declencheur": flab, "k": k,
+                             "rotation_x": mult(rot), "detenteur_x": mult(hold), "rotations": n_rot(rot),
+                             "placebo_median_x": float(np.median(plac)), "part_placebos_battus": float((plac < mult(rot)).mean()),
+                             "fenetres_gagnees": w, "fenetres_perdues": l, "fenetres_egales": t,
+                             "rotations_par_fenetre": float(np.mean(nr)), "p_signe": sign_test_p(w, l)})
+                log.info("formalisation %s %s k=%d : %.2f× contre %.2f×", uname, fid, k, rows[-1]["rotation_x"], rows[-1]["detenteur_x"])
+    return pd.DataFrame(rows)
+
+
+GRID_KEYS = ("trigger", "mult", "range_win", "bottom", "k")
+
+
 def grid_runs(panel, el, basket: pd.Series, start, end=None):
-    keys = list(GRID_SPACE)
+    """Tous les réglages ; chaque variante est comparée au détenteur qui a fait les mêmes achats
+    (même k, même fourchette pour l'entrée). Renvoie le tableau et les écarts quotidiens (log)."""
+    holders = {}
     rows, exc = [], {}
-    for vals in itertools.product(*(GRID_SPACE[k] for k in keys)):
-        kw = dict(zip(keys, vals))
-        res = mc.simulate_rotation(panel, el, mc.with_params(A_PRIORI, **kw), start=start, end=end)
+    for vals in itertools.product(*(GRID_SPACE[k] for k in GRID_KEYS)):
+        kw = dict(zip(GRID_KEYS, vals))
+        p = mc.with_params(A_PRIORI, **kw)
+        hk = (kw["k"], kw["range_win"])
+        if hk not in holders:
+            holders[hk] = mc.simulate_rotation(panel, el, mc.with_params(p, target="none"), start=start, end=end).returns.dropna()
+        h = holders[hk]
+        res = mc.simulate_rotation(panel, el, p, start=start, end=end)
         r = res.returns.dropna()
-        b = basket.reindex(r.index)
-        x = np.log1p(r) - np.log1p(b)
-        name = "mult={mult:g} low={low_win} range={range_win} bottom={bottom:g} k={k}".format(**kw)
+        x = np.log1p(r) - np.log1p(h.reindex(r.index))
+        name = "{trigger} mult={mult:g} range={range_win} bottom={bottom:g} k={k}".format(**kw)
         exc[name] = x
-        rows.append({"variante": name, **kw, **mc.perf(r), "rotations": n_rot(res),
-                     "exces_log_an": float(x.mean() * 365), "sharpe_exces": float(x.mean() / x.std() * math.sqrt(365)) if x.std() > 0 else np.nan,
+        b = basket.reindex(r.index)
+        rows.append({"variante": name, **kw, "total_x": float((1 + r).prod()), "detenteur_x": float((1 + h).prod()),
+                     "rotations": n_rot(res), "exces_detenteur_log_an": float(x.mean() * 365),
+                     "sharpe_exces": float(x.mean() / x.std() * math.sqrt(365)) if x.std() > 0 else np.nan,
+                     "bat_detenteur": bool(x.sum() > 1e-9), "bat_panier": bool(np.log1p(r).sum() > np.log1p(b).sum()),
                      "a_priori": all(getattr(A_PRIORI, k) == v for k, v in kw.items())})
     return pd.DataFrame(rows), pd.DataFrame(exc)
 
 
-def robustness(panel, el_base, start, basket_cost_fn) -> pd.DataFrame:
-    p = A_PRIORI
-    el_comm = mc.eligibility(panel, community=True)
-    cases = [("règle de l'auteur (0,75 % par échange, exécution à l'ouverture de J+1)", p, el_base),
-             ("frais 0,25 % par échange", mc.with_params(p, cost=0.0025), el_base),
-             ("frais 1,5 % par échange", mc.with_params(p, cost=0.015), el_base),
-             ("exécution à la clôture de J+1", mc.with_params(p, execution="next_close"), el_base),
-             ("pièce retirée de la cote revendue −50 %", mc.with_params(p, delist_haircut=0.5), el_base),
-             ("k = 1 pièce", mc.with_params(p, k=1), el_base),
-             ("k = 3 pièces", mc.with_params(p, k=3), el_base),
-             ("seuil 2x au lieu de 3x", mc.with_params(p, mult=2.0), el_base),
-             ("univers « community coins » (déjà −70 % puis ×2)", p, el_comm)]
+def distinct_series(exc: pd.DataFrame, names) -> list[str]:
+    seen, keep = set(), []
+    for n in names:
+        key = tuple(np.round(exc[n].fillna(0).cumsum().to_numpy()[:: max(1, len(exc) // 50)], 9))
+        if key not in seen:
+            seen.add(key)
+            keep.append(n)
+    return keep
+
+
+def periodic_table(panel, el, start, basket: pd.Series, n_rand: int, n_boot: int) -> pd.DataFrame:
+    """Rotation systématique vers le bas de fourchette (hebdomadaire, mensuelle), contre le haut de
+    fourchette, le hasard et le panier."""
     rows = []
-    for lab, q, el in cases:
-        rot = mc.simulate_rotation(panel, el, q, start=start)
-        hold = mc.simulate_rotation(panel, el, mc.with_params(q, target="none"), start=start)
-        bas = mc.simulate_basket(panel, el, cost=q.cost, delist_haircut=q.delist_haircut, start=start)
-        pr, ph, pb = mc.perf(rot.returns), mc.perf(hold.returns), mc.perf(bas.returns)
-        rows.append({"cas": lab, "rotation_x": pr.get("total_x"), "detenteur_x": ph.get("total_x"), "panier_x": pb.get("total_x"),
-                     "rotation_dd": pr.get("max_dd"), "rotations": n_rot(rot)})
+    for every, lab in ((7, "hebdomadaire"), (30, "mensuelle")):
+        for k in (2, 5):
+            res = {rule: mc.simulate_periodic(panel, el, k, every, rule, start=start, tranches=every)
+                   for rule in ("bottom", "top")}
+            rnd = np.array([mult(mc.simulate_periodic(panel, el, k, every, "random", seed=s, start=start, tranches=every))
+                            for s in range(n_rand)])
+            x = (np.log1p(res["bottom"].returns) - np.log1p(basket.reindex(res["bottom"].returns.index))).dropna().to_numpy()
+            bs = mc.block_bootstrap(x, lambda v: v.mean() * 365, block=30, n_boot=n_boot)
+            rows.append({"frequence": lab, "k": k, "bas_x": mult(res["bottom"]), "haut_x": mult(res["top"]),
+                         "hasard_median_x": float(np.median(rnd)), "panier_x": float((1 + basket.dropna()).prod()),
+                         "exces_bas_panier_log_an": float(x.mean() * 365), "ic_lo": float(np.percentile(bs, 2.5)),
+                         "ic_hi": float(np.percentile(bs, 97.5))})
     return pd.DataFrame(rows)
 
 
-def regimes(panel, el, rot: pd.Series, bas: pd.Series) -> pd.DataFrame:
+def robustness(panel, el_base, start, uni_ok) -> pd.DataFrame:
+    p = A_PRIORI
+    el_comm = mc.eligibility(panel, community=True)
+    cases = [("règle testée (0,75 % par échange, ouverture de J+1, préavis de retrait 5 j)", p, el_base, "open"),
+             ("frais 0,25 % par échange", mc.with_params(p, cost=0.0025), el_base, "open"),
+             ("frais 1,5 % par échange", mc.with_params(p, cost=0.015), el_base, "open"),
+             ("exécution à la clôture de J+1 (panier compris)", mc.with_params(p, execution="next_close"), el_base, "next_close"),
+             ("sans préavis, pièce retirée revendue −50 %", mc.with_params(p, delist_haircut=0.5, notice_days=0),
+              mc.eligibility(panel, notice_days=0), "open"),
+             ("volume médian ≥ 10 M$", p, mc.eligibility(panel, min_qvol=10e6), "open"),
+             ("volume médian ≥ 20 M$", p, mc.eligibility(panel, min_qvol=20e6), "open"),
+             ("volume médian ≥ 50 M$", p, mc.eligibility(panel, min_qvol=50e6), "open"),
+             ("k = 1 pièce", mc.with_params(p, k=1), el_base, "open"),
+             ("k = 3 pièces", mc.with_params(p, k=3), el_base, "open"),
+             ("seuil 2x au lieu de 3x", mc.with_params(p, mult=2.0), el_base, "open"),
+             ("univers « community coins » (déjà −70 % puis ×2)", p, el_comm, "open")]
+    rows = []
+    for lab, q, el, ex in cases:
+        rot = mc.simulate_rotation(panel, el, q, start=start)
+        hold = mc.simulate_rotation(panel, el, mc.with_params(q, target="none"), start=start)
+        bas = mc.simulate_basket(panel, el, cost=q.cost, delist_haircut=q.delist_haircut, notice_days=q.notice_days,
+                                 execution=ex, start=start)
+        rows.append({"cas": lab, "rotation_x": mult(rot), "detenteur_x": mult(hold), "panier_x": mult(bas),
+                     "rotation_dd": mc.perf(rot.returns).get("max_dd"), "rotations": n_rot(rot)})
+    return pd.DataFrame(rows)
+
+
+def regimes(panel, el, rot: pd.Series, hold: pd.Series, bas: pd.Series) -> pd.DataFrame:
     """Régime du jour d : indice équipondéré de toutes les pièces actives au-dessus / en dessous de sa
     moyenne mobile 200 j, mesuré à la clôture de d − 1 (pas d'information du jour même)."""
     r = panel.close.pct_change(fill_method=None).where(panel.active & panel.active.shift(1, fill_value=False))
@@ -270,8 +390,8 @@ def regimes(panel, el, rot: pd.Series, bas: pd.Series) -> pd.DataFrame:
     rows = []
     for lab, sel in (("haussier (indice > MM 200 j)", up == True), ("baissier (indice < MM 200 j)", up == False)):  # noqa: E712
         s = sel.reindex(rot.index).fillna(False).to_numpy(bool)
-        for name, x in (("rotation", rot), ("panier", bas)):
-            v = x.to_numpy()[s]
+        for name, x in (("rotation", rot), ("détenteur", hold), ("panier", bas)):
+            v = x.reindex(rot.index).to_numpy()[s]
             v = v[np.isfinite(v)]
             rows.append({"regime": lab, "strategie": name, "jours": int(v.size),
                          "rendement_log_an": float(np.log1p(v).mean() * 365) if v.size else np.nan,
@@ -279,9 +399,6 @@ def regimes(panel, el, rot: pd.Series, bas: pd.Series) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-# ---------------------------------------------------------------------------
-# Graphiques
-# ---------------------------------------------------------------------------
 def fig_equity(runs: dict, plac: pd.DataFrame, path: Path, title: str, subtitle: str):
     plt = _pyplot()
     W = 10.0
@@ -413,18 +530,52 @@ def src_line(snippet: str, path: str = "src/tradebot/memecoins.py") -> str:
     raise ValueError(f"citation introuvable : {snippet}")
 
 
+def fig_forms(forms: pd.DataFrame, path: Path, title: str, subtitle: str):
+    """Rapport rotation / détenteur sur la période entière (barres, échelle log) et bilan des départs
+    glissants (texte), pour chaque formalisation × univers × nombre de pièces."""
+    plt = _pyplot()
+    W = 10.0
+    t, s, hh = _header(W, title, subtitle)
+    n = len(forms)
+    H = 0.34 * n + 1.1
+    fig = plt.figure(figsize=(W, H + hh), facecolor=BG)
+    ax = fig.add_axes([0.36, 0.6 / (H + hh), 0.36, (H - 0.9) / (H + hh)])
+    _style_axes(ax, ygrid=False, xgrid=True)
+    ratio = np.log10(forms["rotation_x"].to_numpy() / forms["detenteur_x"].to_numpy())
+    y = np.arange(n)[::-1]
+    cols = [C_BLUE if v > 0 else C_ORANGE for v in ratio]
+    ax.barh(y, ratio, color=cols, height=0.62)
+    ax.axvline(0, color=TEXT_2, lw=0.8)
+    lab = [f"{r.forme} · {'Binance' if r.univers.startswith('Binance') else 'community'} · {r.k} pièces" for r in forms.itertuples()]
+    ax.set_yticks(y)
+    ax.set_yticklabels(lab, fontsize=8.5, color=TEXT_2)
+    lim = max(1.0, float(np.nanmax(np.abs(ratio))) * 1.1)
+    ax.set_xlim(-lim, lim)
+    ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda u, _: fr(10 ** u, 2 if 10 ** u < 1 else 1) + " ×"))
+    ax.set_xlabel("rotation / détenteur sur toute la période (échelle log)", color=TEXT_2, fontsize=9)
+    for yy, r in zip(y, forms.itertuples()):
+        fig.text(0.74, (0.6 + (yy + 0.5) / n * (H - 0.9)) / (H + hh), f"{r.rotations} rot. · départs : {r.fenetres_gagnees} G / "
+                 f"{r.fenetres_perdues} P / {r.fenetres_egales} =", fontsize=8.3, color=TEXT, va="center")
+    _draw_header(fig, t, s)
+    _save(fig, path)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--refresh", action="store_true", help="retélécharger les bougies Binance")
     ap.add_argument("--placebo", type=int, default=500)
+    ap.add_argument("--placebo-formes", type=int, default=100)
     ap.add_argument("--boot", type=int, default=2000)
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     t0 = time.time()
     OUT.mkdir(parents=True, exist_ok=True)
+    for old in ("departs_glissants.png", "grille_162_variantes.csv", "rotations_appariees.csv", "robustesse.csv"):
+        (OUT / old).unlink(missing_ok=True)
 
     panel, uni, ref = mc.load_all(refresh=args.refresh)
     el = mc.eligibility(panel)
+    el_comm = mc.eligibility(panel, community=True)
     n_el = el.sum(axis=1)
     start = n_el[n_el >= MIN_ELIGIBLE].index[0]
     end = panel.dates[-1]
@@ -439,139 +590,154 @@ def main() -> int:
 
     ev = event_study(panel, el, start, args.boot)
     ev.to_csv(OUT / "etats_A_B.csv", index=False)
+    ddA = drawdown_after_A(panel, el, start)
+    ddA.to_csv(OUT / "baisse_depuis_sommet_A.csv", index=False)
     pairs = paired_rotations(panel, el, start, args.boot, A_PRIORI.cost)
-    pairs.to_csv(OUT / "rotations_appariees.csv", index=False)
+    pairs.to_csv(OUT / "rotations_appariees_resume.csv", index=False)
     ic = ic_table(panel, el, start)
     ic.to_csv(OUT / "ic_retour_moyenne.csv", index=False)
     log.info("états et IC : %.0f s", time.time() - t0)
 
     runs, plac = main_runs(panel, el, start, args.placebo)
     perf = perf_table(runs)
-    plac_x = (1 + plac.fillna(0)).prod().to_numpy()
-    rot = runs["rotation (règle de l'auteur)"]
-    rot_x = float((1 + rot.returns.fillna(0)).prod())
-    pct_plac = float((plac_x < rot_x).mean())
     perf.to_csv(OUT / "portefeuilles.csv", index=False)
-    rot.trades.to_csv(OUT / "rotations_regle_auteur.csv", index=False)
+    rot = runs["rotation (règle testée)"]
+    hold = runs["détenteur (mêmes achats de départ, aucune rotation)"]
+    basket = runs["panier équipondéré (30 tranches, rééquilibrage mensuel)"].returns
+    plac_x = (1 + plac.fillna(0)).prod().to_numpy()
+    rot_x = mult(rot)
+    pct_plac = float((plac_x < rot_x).mean())
+    rot.trades.to_csv(OUT / "rotations_regle_testee.csv", index=False)
+    last30 = {k: float((1 + res.returns.iloc[-30:].fillna(0)).prod()) for k, res in runs.items()}
     log.info("portefeuilles + %d placebos : %.0f s", args.placebo, time.time() - t0)
 
     roll = rolling_starts(panel, el, start, end)
     roll.to_csv(OUT / "departs_glissants_12_mois.csv", index=False)
+    forms = formalisations(panel, {"Binance « Meme »": el, "community coins": el_comm}, start, end, args.placebo_formes)
+    forms.to_csv(OUT / "formalisations.csv", index=False)
+    log.info("formalisations : %.0f s", time.time() - t0)
 
-    basket = runs["panier équipondéré (rééquilibré tous les 30 j)"].returns
     grid, exc = grid_runs(panel, el, basket, start)
-    grid.to_csv(OUT / "grille_162_variantes.csv", index=False)
-    sr_trials = (exc.mean() / exc.std()).to_numpy()
-    best = grid.sort_values("sharpe_exces", ascending=False).iloc[0]
-    dsr = mc.deflated_sharpe(exc[best["variante"]].dropna().to_numpy(), sr_trials)
+    grid.to_csv(OUT / "grille_variantes.csv", index=False)
+    rotating = grid[grid["rotations"] > 0]
+    distinct = distinct_series(exc, rotating.sort_values("sharpe_exces", ascending=False)["variante"])
+    sr_trials = np.array([exc[n].mean() / exc[n].std() for n in distinct])
+    best = grid.set_index("variante").loc[distinct[int(np.nanargmax(sr_trials))]]
+    dsr = mc.deflated_sharpe(exc[best.name].dropna().to_numpy(), sr_trials)
     apr = grid[grid["a_priori"]].iloc[0]
-    psr_apr = mc.probabilistic_sharpe(exc[apr["variante"]].dropna().to_numpy(), 0.0)
 
-    # walk-forward : choix sur la 1re moitié, test sur la 2e
+    # walk-forward : choix sur la 1re moitié parmi les réglages qui tournent, test sur la 2e
     mid = start + (end - start) / 2
     bas1 = mc.simulate_basket(panel, el, cost=A_PRIORI.cost, start=start, end=mid).returns
-    g1, _ = grid_runs(panel, el, bas1, start, end=mid)
-    pick = g1.sort_values("sharpe_exces", ascending=False).iloc[0]
-    kw = {k: pick[k] for k in GRID_SPACE}
-    kw["k"], kw["low_win"], kw["range_win"] = int(kw["k"]), int(kw["low_win"]), int(kw["range_win"])
-    r2 = mc.simulate_rotation(panel, el, mc.with_params(A_PRIORI, **kw), start=mid).returns
-    b2 = mc.simulate_basket(panel, el, cost=A_PRIORI.cost, start=mid).returns
-    h2 = mc.simulate_rotation(panel, el, mc.with_params(A_PRIORI, target="none", k=kw["k"]), start=mid).returns
-    x2 = (np.log1p(r2) - np.log1p(b2.reindex(r2.index))).dropna()
-    wf = {"coupure": str(mid.date()), "variante_choisie": pick["variante"], "exces_log_an_1re_moitie": float(pick["exces_log_an"]),
-          "rotation_x_2e": float((1 + r2.dropna()).prod()), "panier_x_2e": float((1 + b2.dropna()).prod()),
-          "detenteur_x_2e": float((1 + h2.dropna()).prod()), "exces_log_an_2e": float(x2.mean() * 365),
-          "psr_2e": mc.probabilistic_sharpe(x2.to_numpy(), 0.0)}
+    g1, x1 = grid_runs(panel, el, bas1, start, end=mid)
+    r1 = g1[g1["rotations"] > 0]
+    top = float(r1["sharpe_exces"].max())
+    tied = r1[np.isclose(r1["sharpe_exces"], top, rtol=0, atol=1e-10)]
+    wf_rows = []
+    for v in tied.itertuples():
+        kw = {k: getattr(v, k) for k in GRID_KEYS}
+        kw["k"], kw["range_win"] = int(kw["k"]), int(kw["range_win"])
+        q = mc.with_params(A_PRIORI, **kw)
+        r2 = mc.simulate_rotation(panel, el, q, start=mid)
+        h2 = mc.simulate_rotation(panel, el, mc.with_params(q, target="none"), start=mid)
+        wf_rows.append({"variante": v.variante, "rotation_x_2e": mult(r2), "detenteur_x_2e": mult(h2), "rotations_2e": n_rot(r2)})
+    wf_df = pd.DataFrame(wf_rows)
+    wf_df.to_csv(OUT / "walk_forward.csv", index=False)
+    wf = {"coupure": str(mid.date()), "n_egalites": len(tied), "variantes": list(tied["variante"]),
+          "exces_1re_log_an": float(tied["exces_detenteur_log_an"].iloc[0]),
+          "rot_med": float(wf_df["rotation_x_2e"].median()), "hold_med": float(wf_df["detenteur_x_2e"].median()),
+          "part_bat_detenteur": float((wf_df["rotation_x_2e"] > wf_df["detenteur_x_2e"] + 1e-9).mean()),
+          "panier_2e": mult(mc.simulate_basket(panel, el, cost=A_PRIORI.cost, start=mid))}
     log.info("grille et walk-forward : %.0f s", time.time() - t0)
 
+    per = periodic_table(panel, el, start, basket, n_rand=50, n_boot=args.boot)
+    per.to_csv(OUT / "rotation_periodique.csv", index=False)
     rob = robustness(panel, el, start, None)
-    rob.to_csv(OUT / "robustesse.csv", index=False)
-    reg = regimes(panel, el, rot.returns, basket)
+    rob.to_csv(OUT / "robustesse_variantes.csv", index=False)
+    reg = regimes(panel, el, rot.returns, hold.returns, basket)
     reg.to_csv(OUT / "regimes.csv", index=False)
 
-    # bootstrap de l'écart rotation − panier (log, par blocs de 30 j)
-    xr = (np.log1p(rot.returns) - np.log1p(basket)).dropna().to_numpy()
-    bs = mc.block_bootstrap(xr, lambda v: v.mean() * 365, block=30, n_boot=args.boot)
-    xh = (np.log1p(rot.returns) - np.log1p(runs["détenteur (mêmes achats de départ, aucune rotation)"].returns)).dropna().to_numpy()
-    bh = mc.block_bootstrap(xh, lambda v: v.mean() * 365, block=30, n_boot=args.boot, seed=1)
-    boot = {"rot_moins_panier_log_an": float(xr.mean() * 365), "lo": float(np.percentile(bs, 2.5)), "hi": float(np.percentile(bs, 97.5)),
-            "rot_moins_detenteur_log_an": float(xh.mean() * 365), "lo_h": float(np.percentile(bh, 2.5)), "hi_h": float(np.percentile(bh, 97.5))}
-
-    # derniers 30 jours (la période citée par l'auteur)
-    last30 = {k: float((1 + res.returns.iloc[-30:].fillna(0)).prod()) for k, res in runs.items()}
-
     # ------------------------------------------------------------------ graphiques
-    evA = ev[(ev["horizon_j"] == 60) & ev["etat"].str.startswith("A")].iloc[0]
     evB = ev[(ev["horizon_j"] == 60) & ev["etat"].str.startswith("B")].iloc[0]
-    evT = ev[(ev["horizon_j"] == 60) & ev["etat"].str.startswith("toute")].iloc[0]
+    evA = ev[(ev["horizon_j"] == 60) & ev["etat"].str.startswith("A")].iloc[0]
     fig_states(ev, OUT / "etats_A_B.png",
                f"En bas de sa fourchette, un memecoin refait 3x dans {pc(evB['p_triple'])} des cas en 60 jours, et reperd 30 % dans {pc(evB['p_moins30'])} des cas",
                f"55 perpétuels « Meme » de Binance (retirés compris), {day(start)} – {day(end)}. A : 1er jour où la clôture vaut ≥ 3 × le plus bas des 30 j "
-               f"(n = {int(evA['n'])}). B : 1er jour sous 20 % de la fourchette 60 j (n = {int(evB['n'])}). Barres : IC 95 % (bootstrap par semaine).")
+               f"(n = {int(evA['n'])}). B : 1er jour sous 20 % de la fourchette 60 j (n = {int(evB['n'])}). Barres : IC 95 % (bootstrap par mois).")
     fig_equity(runs, plac, OUT / "portefeuilles.png",
-               f"La rotation de l'auteur finit à {xm(rot_x)} la mise, le panier à {xm(float((1 + basket.fillna(0)).prod()))} : "
-               f"elle fait mieux que {pc(pct_plac)} des rotations au hasard",
-               f"Du {day(start)} au {day(end)}, 2 pièces détenues, 0,75 % de frais et glissement par échange, décision à la clôture et "
-               f"exécution le lendemain. Échelle logarithmique.")
-    fig_hist(grid["total_x"].to_numpy(), [(float(apr["total_x"]), "règle de l'auteur", C_BLUE),
-                                          (float((1 + basket.fillna(0)).prod()), "panier équipondéré", TEXT)],
-             OUT / "grille_variantes.png",
-             f"{int((grid['exces_log_an'] > 0).sum())} réglages sur {len(grid)} battent le panier ; le meilleur ne résiste pas à la correction "
-             f"pour essais multiples (DSR = {fr(dsr['dsr'], 2)})",
-             "Multiple final de la mise pour 162 réglages de la rotation (seuil 2x/3x/4x, plus bas 14/30 j, fourchette 30/60/90 j, bas 10/20/30 %, "
-             "1 à 3 pièces), même période, mêmes frais.", "multiple final de la mise (échelle log)")
-    fig_hist(roll["rotation"].to_numpy() / roll["detenteur"].to_numpy(), [(1.0, "égalité", TEXT)], OUT / "departs_glissants.png",
-             f"Sur {len(roll)} départs mensuels tenus 12 mois, la rotation fait mieux que garder ses pièces dans "
-             f"{pc(float((roll['rotation'] > roll['detenteur']).mean()))} des cas",
-             "Rapport « multiple de la rotation / multiple du détenteur » (mêmes achats de départ, frais compris). À droite de 1 : la rotation gagne.",
-             "rotation / détenteur (échelle log)")
+               f"Avec 2 pièces, la règle ne tourne que {n_rot(rot)} fois en {fr((end - start).days / 365.25, 1)} ans : "
+               f"{xm(rot_x)} la mise, contre {xm(mult(hold))} pour le détenteur des mêmes pièces",
+               f"Du {day(start)} au {day(end)}, 0,75 % de frais et glissement par échange, décision à la clôture et exécution le lendemain. "
+               f"Bande grise : 500 rotations au hasard (mêmes achats de départ et mêmes déclenchements). Échelle logarithmique.")
+    fig_forms(forms, OUT / "formalisations.png",
+              "Selon la façon de lire la règle, la rotation fait de 0,1× à 6× le détenteur sur la période ; d'un départ à l'autre, "
+              "elle gagne à peu près aussi souvent qu'elle perd",
+              "Barre : rotation / détenteur (mêmes achats de départ) sur toute la période. Texte : nombre de rotations et bilan des départs "
+              "mensuels tenus 12 mois (G gagnés, P perdus, = égalité sans rotation). F0–F3 : déclencheurs, voir le tableau.")
+    rr = (rotating["total_x"] / rotating["detenteur_x"]).to_numpy()
+    fig_hist(rr, [(1.0, "égalité avec le détenteur", TEXT)], OUT / "grille_variantes.png",
+             f"Sur {len(rotating)} réglages qui tournent au moins une fois, {int(rotating['bat_detenteur'].sum())} font mieux que garder "
+             f"les mêmes pièces",
+             f"Rapport « multiple de la rotation / multiple du détenteur aux mêmes achats » pour {len(grid)} réglages (4 déclencheurs, "
+             f"seuil 2/3/4, fourchette 30/60/90 j, bas 10/20/30 %, 1/2/3/5 pièces), dont {len(grid) - len(rotating)} ne tournent jamais "
+             f"(exclus). Même période, mêmes frais.", "rotation / détenteur (échelle log)")
 
-    # ------------------------------------------------------------------ README
     runtime = time.time() - t0
     meta = {"genere": pd.Timestamp.now(tz="UTC").isoformat(), "debut": str(start.date()), "fin": str(end.date()),
             "pieces": len(uni), "retirees": len(delisted), "placebos": args.placebo, "boot": args.boot,
-            "dsr": dsr, "psr_a_priori": psr_apr, "walk_forward": wf, "bootstrap": boot, "derniers_30_jours": last30,
+            "dsr": dsr, "meilleur_reglage": best.name, "walk_forward": wf, "derniers_30_jours": last30,
             "part_placebos_battus": pct_plac, "runtime_s": runtime}
     (OUT / "run.json").write_text(json.dumps(meta, indent=2, default=str, ensure_ascii=False))
-    write_readme(uni_out, delisted, start, end, ev, pairs, ic, perf, plac_x, rot_x, pct_plac, roll, grid, dsr, apr, psr_apr,
-                 best, wf, rob, reg, boot, last30, runtime)
+    write_readme(dict(uni=uni_out, delisted=delisted, start=start, end=end, ev=ev, ddA=ddA, pairs=pairs, ic=ic, perf=perf,
+                      plac_x=plac_x, rot_x=rot_x, pct_plac=pct_plac, rot=rot, hold=hold, roll=roll, forms=forms, grid=grid,
+                      rotating=rotating, distinct=distinct, dsr=dsr, best=best, apr=apr, wf=wf, wf_df=wf_df, per=per,
+                      rob=rob, reg=reg, last30=last30, runtime=runtime))
     log.info("terminé en %.0f s", runtime)
     return 0
 
 
-def write_readme(uni, delisted, start, end, ev, pairs, ic, perf, plac_x, rot_x, pct_plac, roll, grid, dsr, apr, psr_apr,
-                 best, wf, rob, reg, boot, last30, runtime):
+def write_readme(d: dict):
+    ev, pairs, ic, perf, roll, forms, grid, rotating = (d[k] for k in ("ev", "pairs", "ic", "perf", "roll", "forms", "grid", "rotating"))
+    start, end, wf, dsr, best, per, rob, reg, ddA = (d[k] for k in ("start", "end", "wf", "dsr", "best", "per", "rob", "reg", "ddA"))
     e60 = ev[ev["horizon_j"] == 60].set_index("etat")
-    A = e60.loc["A : vient de faire 3x"]
-    B = e60.loc["B : bas de fourchette"]
-    T = e60.loc["toute pièce éligible, tout jour"]
+    A, B, T = e60.loc["A : vient de faire 3x"], e60.loc["B : bas de fourchette"], e60.loc["toute pièce éligible, tout jour"]
+    dA = ddA[ddA["etat"].str.startswith("A")].set_index("horizon_j")
+    dT = ddA[ddA["etat"].str.startswith("toute")].set_index("horizon_j")
     p60 = pairs[pairs["horizon_j"] == 60].set_index("choix")
-    pB = p60.loc["rotation vers B (bas de fourchette)"] if "rotation vers B (bas de fourchette)" in p60.index else None
-    pX = p60.loc["rotation vers une pièce quelconque"] if "rotation vers une pièce quelconque" in p60.index else None
+    p30 = pairs[pairs["horizon_j"] == 30].set_index("choix")
+    pB, pX = p60.loc["rotation vers B (bas de fourchette)"], p60.loc["rotation vers une pièce quelconque"]
     ic_rp = ic[(ic["signal"] == "position dans la fourchette 60 j") & (ic["horizon_j"] == 30)].iloc[0]
-    ic_m30 = ic[(ic["signal"] == "rendement des 30 derniers jours") & (ic["horizon_j"] == 30)].iloc[0]
     P = perf.set_index("strategie")
-    rot = P.loc["rotation (règle de l'auteur)"]
+    rot = P.loc["rotation (règle testée)"]
     hold = P.loc["détenteur (mêmes achats de départ, aucune rotation)"]
-    bas = P.loc["panier équipondéré (rééquilibré tous les 30 j)"]
-    inv = P.loc["rotation inverse (vers le haut de fourchette)"]
-    win_h = float((roll["rotation"] > roll["detenteur"]).mean())
-    win_b = float((roll["rotation"] > roll["panier"]).mean())
-    n_beat = int((grid["exces_log_an"] > 0).sum())
-    def sign(v, t):
-        if abs(t) < 2:
-            return "non significatif (|t| < 2) : ni retour à la moyenne ni momentum démontré"
-        return "retour à la moyenne (les pièces en retard rattrapent)" if v < 0 else "momentum (les pièces en avance continuent)"
-
-    def evrow(r, lab):
-        return (f"| {lab} | {int(r['n'])} | {pc(r['p_double'])} | {pc(r['p_triple'])} | {pc(r['p_moins30'])} | {pc(r['p_moins70'])} | "
-                f"{pc(r['ret_median'], signed=True)} | {pc(r['ret_moyen'], signed=True)} |")
+    bas = P.loc["panier équipondéré (30 tranches, rééquilibrage mensuel)"]
+    inv = P.loc["rotation inverse (mêmes achats et déclenchements, cible en haut de fourchette)"]
+    w, l, t = wlt(roll["rotation"].to_numpy(), roll["detenteur"].to_numpy())
+    wb, lb, _ = wlt(roll["rotation"].to_numpy(), roll["panier"].to_numpy())
+    wi, li, ti = wlt(roll["inverse"].to_numpy(), roll["rotation"].to_numpy())
+    fw, fl, ft = int(forms["fenetres_gagnees"].sum()), int(forms["fenetres_perdues"].sum()), int(forms["fenetres_egales"].sum())
+    fbest = forms.loc[(forms["rotation_x"] / forms["detenteur_x"]).idxmax()]
+    fworst = forms.loc[(forms["rotation_x"] / forms["detenteur_x"]).idxmin()]
+    n_bh = int(rotating["bat_detenteur"].sum())
+    wk2 = per[(per["frequence"] == "hebdomadaire") & (per["k"] == 2)].iloc[0]
+    tr = d["rot"].trades
+    rt = tr[tr["why"] == "rotation"]
+    yrs = (end - start).days / 365.25
+    q_exec = src_line("v *= O[i + 1, sell] / C[i, sell] * (1.0 - c)")
+    q_roll = src_line("lo = close.rolling(w, min_periods=w).min()")
+    q_uni = src_line('and "Meme" in (s.get("underlyingSubType") or [])')
+    q_where = src_line("tabs[k] = tabs[k].where(last)")
+    q_cost = src_line("v *= 1.0 - c")
+    q_open = src_line('elif p.execution == "open":')
+    q_date = src_line('df["date"] = pd.to_datetime(df["open_ms"], unit="ms").dt.normalize()')
+    q_soon = src_line("if s is not None and (soon[i, s] or not act[i + 1, s]):")
+    q_cand = src_line("return np.array([x for x in np.flatnonzero(E[i]) if x not in held and act[i + 1, x]], dtype=int)")
 
     L = []
     L.append("# Memecoins : la « rotation » entre community coins bat-elle la détention ?\n")
-    L.append(f"*Généré le {pd.Timestamp.now(tz='UTC').strftime('%d/%m/%Y %H:%M')} UTC par `scripts/memecoin_rotation.py` ({runtime:.0f} s). "
-             f"Données : {len(uni)} perpétuels USDT classés « Meme » par Binance, dont {len(delisted)} retirés de la cote, bougies quotidiennes ; "
-             f"étude du {day(start)} au {day(end)}.*\n")
+    L.append(f"*Généré le {pd.Timestamp.now(tz='UTC').strftime('%d/%m/%Y %H:%M')} UTC par `scripts/memecoin_rotation.py` ({d['runtime']:.0f} s). "
+             f"Données : {len(d['uni'])} perpétuels USDT classés « Meme » par Binance, dont {len(d['delisted'])} retirés de la cote, bougies "
+             f"quotidiennes ; étude du {day(start)} au {day(end)}. Version corrigée après relecture contradictoire (§ 12).*\n")
     L.append("> Recherche sur données publiques historiques, aucun ordre, aucune recommandation. Les liens de parrainage et le canal "
              "d'« appels » de l'article testé ne sont pas repris ici.\n")
     L.append("## 0. Réponse courte\n")
@@ -579,196 +745,218 @@ def write_readme(uni, delisted, start, end, ev, pairs, ic, perf, plac_x, rot_x, 
              "3x (A) et acheter celui qui est en bas de sa fourchette (B), car B « va faire le même 3x » avec « −30 % au pire », alors que A "
              "« fera peut-être +100 % » avant « un repli typique de −70 % ». Exemple de l'auteur : rotateur 10 k$ → 270 k$, détenteur 10 k$ → 27 k$.\n")
     L.append(f"* **B ne fait pas « le même 3x ».** Au premier jour sous 20 % de sa fourchette de 60 jours, un memecoin atteint +200 % dans les "
-             f"60 jours suivants dans **{pc(B['p_triple'])}** des cas (IC 95 % {pc(B['p_triple_lo'])} – {pc(B['p_triple_hi'])}), contre "
-             f"{pc(T['p_triple'])} pour une pièce éligible quelconque un jour quelconque. Il reperd 30 % à un moment dans **{pc(B['p_moins30'])}** "
-             f"des cas (l'auteur : « −30 % au pire »). Rendement médian à 60 jours : {pc(B['ret_median'], signed=True)}.")
-    L.append(f"* **A retombe, mais pas du « −70 % typique ».** Après un 3x, rendement médian à 60 jours {pc(A['ret_median'], signed=True)} "
-             f"(pièce quelconque : {pc(T['ret_median'], signed=True)} ; moyenne de A {pc(A['ret_moyen'], signed=True)}, tirée par quelques "
-             f"envolées), plus bas médian {pc(A['min_median'], signed=True)}, −70 % touché dans {pc(A['p_moins70'])} des cas (pièce "
-             f"quelconque : {pc(T['p_moins70'])}), +100 % dans {pc(A['p_double'])} (n = {int(A['n'])} événements, petit échantillon).")
-    if pB is not None:
-        L.append(f"* **La décision de rotation elle-même** (vendre A le jour de son 3x, acheter la pièce la plus basse dans sa fourchette, "
-                 f"frais déduits) : écart moyen de rendement à 60 jours B − A = {pc(math.expm1(pB['gain_log_moyen']), signed=True)} "
-                 f"(IC 95 % {pc(math.expm1(pB['ic_lo']), signed=True)} ; {pc(math.expm1(pB['ic_hi']), signed=True)}), B gagne dans "
-                 f"{pc(pB['p_gagne'])} des {int(pB['n'])} cas. Acheter une pièce éligible quelconque à la place : "
-                 f"{pc(math.expm1(pX['gain_log_moyen']), signed=True)}.")
-        p30 = pairs[pairs["horizon_j"] == 30].set_index("choix")
-        if "rotation vers une pièce quelconque" in p30.index:
-            q30 = p30.loc["rotation vers une pièce quelconque"]
-            b30 = p30.loc["rotation vers B (bas de fourchette)"]
-            L.append(f"* **Vendre A après son 3x n'est pas absurde, acheter le bas de fourchette n'apporte rien.** À 30 jours, une pièce "
-                     f"éligible quelconque fait en moyenne {pc(math.expm1(q30['gain_log_moyen']), signed=True)} de mieux que A "
-                     f"(IC 95 % {pc(math.expm1(q30['ic_lo']), signed=True)} ; {pc(math.expm1(q30['ic_hi']), signed=True)} : limite, et non "
-                     f"significatif à 60 jours), contre {pc(math.expm1(b30['gain_log_moyen']), signed=True)} pour la pièce en bas de "
-                     f"fourchette (IC {pc(math.expm1(b30['ic_lo']), signed=True)} ; {pc(math.expm1(b30['ic_hi']), signed=True)}). Deux horizons "
-                     f"essayés, {int(q30['n'])} événements : un indice, pas une règle.")
-    L.append(f"* **Les pièces en retard ne rattrapent pas de façon exploitable.** Corrélation de rang, jour par jour, entre la position dans la "
-             f"fourchette et le rendement des 30 jours suivants : {fr(ic_rp['ic_moyen'], 3, signed=True)} (t de Newey-West "
-             f"{fr(ic_rp['t_nw'], 1, signed=True)}) ; avec le rendement des 30 derniers jours : {fr(ic_m30['ic_moyen'], 3, signed=True)} "
-             f"(t {fr(ic_m30['t_nw'], 1, signed=True)}). Verdict : {sign(ic_rp['ic_moyen'], ic_rp['t_nw'])}.")
-    L.append(f"* **Portefeuilles, frais compris** ({day(start)} – {day(end)}) : rotation de l'auteur {xm(rot['total_x'])} la mise "
-             f"({int(rot['rotations'])} rotations, perte maximale {pc(rot['max_dd'])}), détenteur des mêmes pièces {xm(hold['total_x'])}, "
-             f"panier équipondéré {xm(bas['total_x'])}, rotation inverse {xm(inv['total_x'])}. La rotation fait mieux que "
-             f"{pc(pct_plac)} de 500 rotations vers une pièce **au hasard**.")
-    L.append(f"* **Selon le point de départ** ({len(roll)} départs mensuels tenus 12 mois) : la rotation bat le détenteur dans {pc(win_h)} "
-             f"des cas et le panier dans {pc(win_b)}.")
-    L.append(f"* **En essayant 162 réglages**, {n_beat} battent le panier sur la période ; le meilleur ({best['variante']}) a un Sharpe "
-             f"d'écart de {fr(best['sharpe_exces'], 2)} mais un **Sharpe dégonflé de {fr(dsr['dsr'], 2)}** (seuil 0,95) : indiscernable du "
-             f"hasard une fois les essais comptés. Choisi sur la 1re moitié ({wf['variante_choisie']}), il fait {xm(wf['rotation_x_2e'])} sur la "
-             f"2e moitié, contre {xm(wf['panier_x_2e'])} pour le panier et {xm(wf['detenteur_x_2e'])} pour le détenteur.")
-    L.append(f"* **Verdict.** Sur les memecoins établis de Binance, la règle « vendre le 3x, acheter le bas de fourchette » ne montre aucun "
-             f"avantage démontré sur la détention ou sur un panier. Le calcul de l'auteur (rapport gain/risque de 6,7 contre 1,4, 270 k$ contre "
-             f"27 k$) suppose connue l'issue : que B refera 3x et ne perdra pas plus de 30 %. Mesuré, ce scénario arrive dans "
-             f"{pc(B['p_triple'])} des cas pour le 3x, et la chute de 30 % dans {pc(B['p_moins30'])}.\n")
+             f"60 jours suivants dans **{pc(B['p_triple'])}** des cas (IC 95 % {pc(B['p_triple_lo'])} – {pc(B['p_triple_hi'])}), comme une pièce "
+             f"éligible quelconque ({pc(T['p_triple'])}). Il reperd 30 % à un moment dans **{pc(B['p_moins30'])}** des cas (IC "
+             f"{pc(B['p_moins30_lo'])} – {pc(B['p_moins30_hi'])} ; l'auteur : « −30 % au pire »).")
+    L.append(f"* **A retombe bien, mais lentement.** Depuis son sommet, la plus forte baisse médiane après un 3x est de "
+             f"{pc(dA.loc[60, 'dd_median'], signed=True)} sur 60 jours et {pc(dA.loc[180, 'dd_median'], signed=True)} sur 180 jours ; "
+             f"−70 % ou pire dans {pc(dA.loc[60, 'p_dd70'])} des cas à 60 jours et {pc(dA.loc[180, 'p_dd70'])} à 180 jours (pièce "
+             f"quelconque : {pc(dT.loc[180, 'p_dd70'])}). Le « repli typique de −70 % » de l'auteur se vérifie donc à long terme ; "
+             f"il ne dit pas quand vendre (n = {int(dA.loc[60, 'n'])} événements).")
+    L.append(f"* **La décision de rotation elle-même** (43 cas : vendre A le jour de son 3x, acheter la pièce la plus basse de sa "
+             f"fourchette, frais déduits) : en moyenne **{pc(pB['gain_moyen'], signed=True)}** de richesse à 60 jours par rapport à garder A "
+             f"(IC 95 % {pc(pB['ic_lo'], signed=True)} ; {pc(pB['ic_hi'], signed=True)}, médiane {pc(pB['gain_median'], signed=True)}), "
+             f"gagnante dans {pc(pB['p_gagne'])} des cas. Vers une pièce éligible quelconque : {pc(pX['gain_moyen'], signed=True)} "
+             f"(IC {pc(pX['ic_lo'], signed=True)} ; {pc(pX['ic_hi'], signed=True)}). Aucun des deux n'est démontré.")
+    L.append(f"* **Les pièces en retard ne rattrapent pas de façon mesurable.** Corrélation de rang entre la position dans la fourchette et le "
+             f"rendement des 30 jours suivants : {fr(ic_rp['ic_moyen'], 3, signed=True)} (t de Newey-West {fr(ic_rp['t_nw'], 1, signed=True)}) : "
+             f"ni retour à la moyenne ni momentum démontré.")
+    L.append(f"* **Portefeuille de la règle testée (F0, 2 pièces)** : elle ne tourne que {n_rot(d['rot'])} fois en {fr(yrs, 1)} ans ; "
+             f"{xm(rot['total_x'])} la mise contre {xm(hold['total_x'])} pour le détenteur des mêmes pièces, {xm(bas['total_x'])} pour le "
+             f"panier et {xm(inv['total_x'])} pour la rotation inverse (mêmes achats et déclenchements, cible en haut de fourchette). Ce "
+             f"résultat tient à {n_rot(d['rot'])} décisions : ce n'est pas une mesure de la stratégie.")
+    L.append(f"* **Quatre lectures de la règle, deux univers, 2 ou 5 pièces** (16 cas, § 6) : sur la période entière, la rotation va de "
+             f"{xm(float(fworst['rotation_x'] / fworst['detenteur_x']))} à {xm(float(fbest['rotation_x'] / fbest['detenteur_x']))} le "
+             f"détenteur. Le meilleur cas ({fbest['forme']}, {fbest['univers']}, {int(fbest['k'])} pièces : {xm(fbest['rotation_x'])} contre "
+             f"{xm(fbest['detenteur_x'])}, {int(fbest['rotations'])} rotations) est une seule trajectoire : sur les départs mensuels tenus "
+             f"12 mois, il gagne {int(fbest['fenetres_gagnees'])} fois, perd {int(fbest['fenetres_perdues'])} fois et fait "
+             f"{int(fbest['fenetres_egales'])} égalités. Tous cas réunis : {fw} départs gagnés, {fl} perdus, {ft} égalités.")
+    L.append(f"* **Tous les réglages** ({len(grid)} ; {len(rotating)} tournent au moins une fois) : {n_bh} des {len(rotating)} font mieux que "
+             f"le détenteur aux mêmes achats. Le meilleur ({best.name}) a un Sharpe dégonflé de **{fr(dsr['dsr'], 2)}** "
+             f"({dsr['n_trials']} séries distinctes ; seuil 0,95). Walk-forward : les {wf['n_egalites']} réglages à égalité en tête sur la "
+             f"1re moitié font en médiane {xm(wf['rot_med'])} sur la 2e, contre {xm(wf['hold_med'])} pour leurs détenteurs.")
+    L.append(f"* **Une rotation systématique vers le bas de fourchette détruit de la valeur** : chaque semaine vers les 2 pièces les plus "
+             f"basses, {xm(wk2['bas_x'])} la mise contre {xm(wk2['panier_x'])} pour le panier (écart {pc(math.expm1(wk2['exces_bas_panier_log_an']), signed=True)} "
+             f"par an, IC {pc(math.expm1(wk2['ic_lo']), signed=True)} ; {pc(math.expm1(wk2['ic_hi']), signed=True)}).")
+    L.append(f"* **Verdict.** Aucune version de « vendre le 3x, acheter le bas de fourchette » ne montre d'avantage qui se répète d'un "
+             f"point de départ à l'autre, ni dans les décisions elles-mêmes. Le calcul de l'auteur (gain/risque 6,7 contre 1,4 ; 270 k$ "
+             f"contre 27 k$) suppose connue l'issue : que B refera 3x ({pc(B['p_triple'])} des cas mesurés) sans perdre plus de 30 % "
+             f"({pc(1 - B['p_moins30'])}). Une trajectoire spectaculaire existe (F2), mais c'est une trajectoire, pas une règle.\n")
 
     L.append("## 1. Données et règle testée\n")
     L.append(f"* **Univers** : les perpétuels USDT que Binance classe « Meme » (`underlyingSubType`), y compris ceux retirés de la cote "
-             f"({', '.join(sorted(s.replace('USDT', '') for s in delisted))}). Le prix du perpétuel suit le spot à quelques pb : il sert de prix, "
-             f"sans levier ni financement. Liste : `univers.csv`.")
+             f"({', '.join(sorted(s.replace('USDT', '') for s in d['delisted']))}). Le prix du perpétuel sert de prix spot (sans levier ni "
+             f"financement) : l'écart est de quelques pb pour les 28 pièces qui ont aussi un marché spot Binance. Liste : `univers.csv`.")
     L.append(f"* **Éligible au jour d** (point-in-time) : échangé ce jour, coté depuis au moins 60 jours, volume quotidien médian (30 j) d'au "
-             f"moins 5 M$ (l'auteur veut pouvoir « entrer et sortir 50–500 k$ »). Début de l'étude : premier jour avec au moins {MIN_ELIGIBLE} "
-             f"pièces éligibles ({day(start)}).")
-    L.append("* **Règle de l'auteur, fixée avant tout test** : 2 pièces détenues. À la clôture de chaque jour, une pièce détenue qui vaut "
-             "au moins 3 × son plus bas des 30 derniers jours est vendue et remplacée par la pièce éligible non détenue la plus basse dans sa "
-             "fourchette de 60 jours, si elle est sous 20 % de cette fourchette (sinon on garde). Exécution à l'ouverture du lendemain, "
-             "0,75 % de frais et glissement par échange (l'auteur : « 1–2 % par rotation »). Pièce retirée de la cote : vendue à sa dernière "
-             "clôture échangée.")
-    L.append("* **Comparaisons** : le détenteur (mêmes achats de départ, aucune rotation), le panier équipondéré de toutes les pièces "
-             "éligibles (rééquilibré tous les 30 jours, mêmes frais), la rotation inverse (vers le haut de fourchette) et 500 rotations "
-             "placebo (mêmes déclenchements, pièce achetée au hasard).\n")
+             f"moins 5 M$, et pas de retrait de la cote annoncé. Binance annonce ses retraits quelques jours à l'avance (NEIROETH : annonce le "
+             f"22/09/2025, règlement le 26/09) : on considère l'information publique 5 jours avant le dernier jour échangé, et une pièce détenue "
+             f"est vendue le lendemain de l'annonce. Début : premier jour avec au moins {MIN_ELIGIBLE} pièces éligibles ({day(start)}).")
+    L.append("* **Règle testée d'abord (F0)** : 2 pièces. À la clôture de chaque jour, une pièce détenue qui vaut au moins 3 × son plus bas "
+             "des 30 derniers jours est vendue si une pièce éligible non détenue est sous 20 % de sa fourchette de 60 jours ; on achète alors "
+             "la plus basse. Achats de départ : les pièces les plus basses de leur fourchette. Exécution à l'ouverture du lendemain, 0,75 % de "
+             "frais et glissement par échange (l'auteur : « 1–2 % par rotation »). Trois autres déclencheurs (F1–F3) sont testés au § 6.")
+    L.append("* **Comparaisons à conditions égales** : le détenteur (mêmes achats de départ, aucune rotation), la rotation inverse et 500 "
+             "placebos (mêmes achats de départ, mêmes déclenchements, seule la pièce achetée change : la plus haute, ou une au hasard), et "
+             "le panier équipondéré de toutes les pièces éligibles (30 tranches rééquilibrées chacune tous les 30 jours à des dates décalées, "
+             "mêmes frais).\n")
 
     L.append("## 2. A après un 3x, B en bas de fourchette : ce qui arrive ensuite\n")
     L.append("![états A et B](etats_A_B.png)\n")
     L.append("| état (60 jours suivants) | n | atteint +100 % | atteint +200 % (3x) | touche −30 % | touche −70 % | rendement médian | rendement moyen |")
     L.append("|---|---|---|---|---|---|---|---|")
     for lab in ("A : vient de faire 3x", "B : bas de fourchette", "toute pièce éligible, tout jour"):
-        L.append(evrow(e60.loc[lab], lab))
-    L.append("")
+        r = e60.loc[lab]
+        L.append(f"| {lab} | {int(r['n'])} | {pc(r['p_double'])} | {pc(r['p_triple'])} | {pc(r['p_moins30'])} | {pc(r['p_moins70'])} | "
+                 f"{pc(r['ret_median'], signed=True)} | {pc(r['ret_moyen'], signed=True)} |")
+    L.append("\n« Touche −30 % » se mesure depuis le prix du jour de l'état. La baisse depuis un sommet (ce que l'auteur appelle un repli) :\n")
+    L.append(md_table(ddA, [("horizon_j", "horizon", lambda v: f"{int(v)} j"), ("etat", "état", str), ("n", "n", lambda v: str(int(v))),
+                            ("dd_median", "baisse médiane depuis un sommet", lambda v: pc(v, 0, signed=True)),
+                            ("p_dd50", "−50 % ou pire", lambda v: pc(v)), ("p_dd70", "−70 % ou pire", lambda v: pc(v))]))
     L.append("Hypothèses de l'auteur, face à la mesure :\n")
-    L.append("| affirmation | mesure (60 jours) |")
+    L.append("| affirmation | mesure |")
     L.append("|---|---|")
-    L.append(f"| A après un 3x : « peut-être +100 % » | +100 % atteint dans {pc(A['p_double'])} des cas |")
-    L.append(f"| A après un 3x : « repli typique de −70 % » | −70 % touché dans {pc(A['p_moins70'])} des cas ; plus bas médian {pc(A['min_median'], signed=True)} |")
-    L.append(f"| B en bas de fourchette : « le même 3x, +200 % » | +200 % atteint dans {pc(B['p_triple'])} des cas |")
-    L.append(f"| B en bas de fourchette : « −30 % au pire » | −30 % touché dans {pc(B['p_moins30'])} des cas ; plus bas médian {pc(B['min_median'], signed=True)} |")
+    L.append(f"| A après un 3x : « peut-être +100 % » | +100 % atteint dans {pc(A['p_double'])} des cas en 60 jours |")
+    L.append(f"| A après un 3x : « repli typique de −70 % » | depuis un sommet : −70 % ou pire dans {pc(dA.loc[60, 'p_dd70'])} des cas en 60 jours, {pc(dA.loc[180, 'p_dd70'])} en 180 jours |")
+    L.append(f"| B en bas de fourchette : « le même 3x, +200 % » | +200 % atteint dans {pc(B['p_triple'])} des cas en 60 jours |")
+    L.append(f"| B en bas de fourchette : « −30 % au pire » | −30 % touché dans {pc(B['p_moins30'])} des cas en 60 jours ; plus bas médian {pc(B['min_median'], signed=True)} |")
     L.append("")
-    if pB is not None:
-        L.append("La décision de rotation, appariée (même jour, frais de la vente et de l'achat déduits) :\n")
-        L.append(md_table(pairs, [("horizon_j", "horizon", lambda v: f"{int(v)} j"), ("choix", "on achète", str), ("n", "rotations", lambda v: str(int(v))),
-                                  ("gain_log_moyen", "écart moyen (B − A)", lambda v: pc(math.expm1(v), 1, signed=True)),
-                                  ("ic_lo", "IC 95 % bas", lambda v: pc(math.expm1(v), 1, signed=True)),
-                                  ("ic_hi", "IC 95 % haut", lambda v: pc(math.expm1(v), 1, signed=True)),
-                                  ("p_gagne", "la rotation gagne", lambda v: pc(v))]))
-    L.append("## 3. Les pièces en retard rattrapent-elles ?\n")
+    L.append("## 3. La décision de rotation, appariée\n")
+    L.append("Le jour où A fait 3x : ce que rapporte le fait de vendre A et d'acheter B (ou une pièce quelconque), en richesse finale, "
+             "frais de la vente et de l'achat déduits : (1 + r_B)/(1 + r_A) × (1 − coût)² − 1. IC 95 % par bootstrap en tirant des mois "
+             "entiers.\n")
+    L.append(md_table(pairs, [("horizon_j", "horizon", lambda v: f"{int(v)} j"), ("choix", "on achète", str), ("n", "rotations", lambda v: str(int(v))),
+                              ("gain_moyen", "gain moyen", lambda v: pc(v, 1, signed=True)), ("ic_lo", "IC 95 % bas", lambda v: pc(v, 1, signed=True)),
+                              ("ic_hi", "IC 95 % haut", lambda v: pc(v, 1, signed=True)), ("gain_median", "gain médian", lambda v: pc(v, 1, signed=True)),
+                              ("p_gagne", "la rotation gagne", lambda v: pc(v))]))
+    L.append("## 4. Les pièces en retard rattrapent-elles ?\n")
     L.append("Corrélation de rang (Spearman), jour par jour, entre un signal et le rendement futur, sur les pièces éligibles ; t de Newey-West "
              "(rendements futurs qui se chevauchent). Négatif = retour à la moyenne (ce qui ferait marcher la rotation), positif = momentum.\n")
     L.append(md_table(ic, [("signal", "signal", str), ("horizon_j", "horizon", lambda v: f"{int(v)} j"), ("jours", "jours", lambda v: str(int(v))),
                            ("ic_moyen", "corrélation moyenne", lambda v: fr(v, 3, signed=True)), ("t_nw", "t (Newey-West)", lambda v: fr(v, 1, signed=True)),
                            ("part_positive", "jours positifs", lambda v: pc(v))]))
-    L.append("## 4. Portefeuilles\n")
+    L.append("## 5. Portefeuilles de la règle testée (F0)\n")
     L.append("![portefeuilles](portefeuilles.png)\n")
     L.append(md_table(perf, [("strategie", "stratégie", str), ("total_x", "multiple final", xm), ("cagr", "par an", lambda v: pc(v, 0, signed=True)),
                              ("vol", "volatilité", lambda v: pc(v)), ("sharpe", "Sharpe", lambda v: fr(v, 2)), ("max_dd", "perte max.", lambda v: pc(v)),
                              ("rotations", "rotations", lambda v: "—" if not np.isfinite(v) else str(int(v)))]))
-    L.append(f"* Rotations placebo (même règle, pièce achetée au hasard) : multiple médian {xm(float(np.median(plac_x)))}, 5–95 % "
-             f"{xm(float(np.percentile(plac_x, 5)))} – {xm(float(np.percentile(plac_x, 95)))} ; la règle de l'auteur ({xm(rot_x)}) fait mieux "
-             f"que {pc(pct_plac)} d'entre elles.")
-    L.append(f"* Écart rotation − panier : {pc(math.expm1(boot['rot_moins_panier_log_an']), signed=True)} par an (IC 95 % par blocs de 30 j : "
-             f"{pc(math.expm1(boot['lo']), signed=True)} ; {pc(math.expm1(boot['hi']), signed=True)}). Rotation − détenteur : "
-             f"{pc(math.expm1(boot['rot_moins_detenteur_log_an']), signed=True)} par an (IC {pc(math.expm1(boot['lo_h']), signed=True)} ; "
-             f"{pc(math.expm1(boot['hi_h']), signed=True)}).")
-    L.append(f"* Sur les 30 derniers jours (la période de l'auteur : « 150 k$ → 420 k$ ») : "
-             + " ; ".join(f"{k.split(' (')[0]} {xm(v)}" for k, v in last30.items()) + ".\n")
-    tr = pd.read_csv(OUT / "rotations_regle_auteur.csv", parse_dates=["date"])
-    rt = tr[tr["why"] == "rotation"]
-    yrs = (end - start).days / 365.25
-    L.append(f"* **La règle ne se déclenche presque jamais** avec 2 pièces : {len(rt)} rotation{'s' if len(rt) > 1 else ''} en "
-             f"{fr(yrs, 1)} ans ("
-             + " ; ".join(f"{day(r.date)} : {r.sell.replace('USDT', '')} ({xm(r.sell_mult, 1)} son plus bas de 30 j) → {r.buy.replace('USDT', '')}"
-                          for r in rt.itertuples())
-             + "). Le multiple final tient donc à ces décisions et aux deux achats de départ : les tests qui comptent sont les "
-               "rotations appariées (section 2), les départs glissants (ci-dessous) et la grille (section 5).\n")
-    L.append("![départs glissants](departs_glissants.png)\n")
-    L.append(f"Départs mensuels tenus 12 mois ({len(roll)} départs, `departs_glissants_12_mois.csv`) : la rotation bat le détenteur dans "
-             f"{pc(win_h)} des cas, le panier dans {pc(win_b)} ; multiple médian rotation {xm(float(roll['rotation'].median()))}, détenteur "
-             f"{xm(float(roll['detenteur'].median()))}, panier {xm(float(roll['panier'].median()))}.")
-    first, last3 = roll.iloc[: len(roll) // 2], roll.iloc[-3:]
-    L.append(f"Le résultat dépend de la date de départ : les départs de la 1re moitié donnent la rotation gagnante contre le détenteur "
-             f"dans {pc(float((first['rotation'] > first['detenteur']).mean()))} des cas, les trois derniers (départs du "
-             f"{day(last3['debut'].iloc[0])} au {day(last3['debut'].iloc[-1])}, fenêtres qui se chevauchent) dans "
-             f"{pc(float((last3['rotation'] > last3['detenteur']).mean()))} (rotation {', '.join(xm(v) for v in last3['rotation'])} contre "
-             f"détenteur {', '.join(xm(v) for v in last3['detenteur'])}), avec 2 ou 3 rotations chacun. Rien de stable : ce sont quelques "
-             f"décisions, pas une règle qui marche.\n")
-    L.append("## 5. Tous les réglages, et la correction pour essais multiples\n")
+    L.append(f"* Rotations effectuées : " + (" ; ".join(
+        f"{day(r.date)} : {r.sell.replace('USDT', '')} ({xm(r.sell_vs_low, 1)} son plus bas de 30 j) → {r.buy.replace('USDT', '')}"
+        for r in rt.itertuples()) or "aucune") + ". Le multiple final tient à ces décisions et aux deux achats de départ.")
+    L.append(f"* Placebos (mêmes achats de départ et mêmes déclenchements, pièce achetée au hasard) : multiple médian "
+             f"{xm(float(np.median(d['plac_x'])))}, 5–95 % {xm(float(np.percentile(d['plac_x'], 5)))} – {xm(float(np.percentile(d['plac_x'], 95)))} ; "
+             f"la règle ({xm(d['rot_x'])}) fait mieux que {pc(d['pct_plac'])} d'entre eux.")
+    L.append(f"* Départs mensuels tenus 12 mois ({len(roll)} fenêtres qui se chevauchent à 11 mois sur 12, soit environ "
+             f"{fr((end - start).days / 365.25, 1)} années indépendantes) : contre le détenteur, {w} gagnées, {l} perdues, {t} égalités "
+             f"(aucune rotation) ; test de signe sur les cas tranchés p = {fr(sign_test_p(w, l), 2)}. Contre le panier : {wb} gagnées, {lb} "
+             f"perdues. La rotation inverse bat la règle dans {wi} fenêtres et perd dans {li}.")
+    L.append(f"* Sur les 30 derniers jours (l'auteur parle de ses propres 30 derniers jours, publiés la veille de cette étude) : "
+             + " ; ".join(f"{k.split(' (')[0]} {xm(v)}" for k, v in d["last30"].items()) + ".\n")
+    L.append("## 6. Quatre lectures de la règle, deux univers\n")
+    L.append("![formalisations](formalisations.png)\n")
+    L.append("F0 : 3 × le plus bas des 30 derniers jours. F1 : 3 × le plus bas de la fourchette de 60 jours. F2 : 3 × le prix d'achat. "
+             "F3 : en haut de fourchette (≥ 90 %) et 2 × son plus bas. Univers « community coins » : pièces qui ont déjà perdu 70 % depuis "
+             "un sommet puis doublé depuis le creux (critère de l'auteur, point-in-time). Placebos : 100 tirages, mêmes achats et "
+             "déclenchements.\n")
+    L.append(md_table(forms, [("univers", "univers", str), ("forme", "règle", str), ("k", "pièces", lambda v: str(int(v))),
+                              ("rotation_x", "rotation", xm), ("detenteur_x", "détenteur", xm), ("rotations", "rotations", lambda v: str(int(v))),
+                              ("part_placebos_battus", "placebos battus", lambda v: pc(v)),
+                              ("fenetres_gagnees", "départs gagnés", lambda v: str(int(v))), ("fenetres_perdues", "perdus", lambda v: str(int(v))),
+                              ("fenetres_egales", "égalités", lambda v: str(int(v))), ("p_signe", "test de signe p", lambda v: fr(v, 2))]))
+    L.append(f"Le cas le plus favorable à l'auteur ({fbest['forme']}, {fbest['univers']}, {int(fbest['k'])} pièces) enchaîne quelques "
+             f"triplements successifs et bat la plupart de ses placebos sur la période entière. Mais d'un départ mensuel à l'autre il ne gagne "
+             f"pas plus souvent qu'il ne perd : c'est une trajectoire chanceuse, pas un avantage qui se répète.\n")
+    L.append("## 7. Tous les réglages, et la correction pour essais multiples\n")
     L.append("![grille](grille_variantes.png)\n")
-    L.append(f"* 162 réglages (`grille_162_variantes.csv`) : {n_beat} battent le panier sur toute la période. Règle de l'auteur : "
-             f"{xm(float(apr['total_x']))}, écart au panier {pc(math.expm1(apr['exces_log_an']), signed=True)} par an, probabilité que son "
-             f"vrai Sharpe d'écart soit positif (PSR) {fr(psr_apr, 2)}.")
-    L.append(f"* Meilleur réglage : {best['variante']}, {xm(float(best['total_x']))}, Sharpe d'écart {fr(best['sharpe_exces'], 2)}. Sharpe "
-             f"dégonflé (Bailey et López de Prado, en Sharpe **par jour**, maximum attendu de {dsr['n_trials']} essais sans talent : "
-             f"{fr(dsr['sr0_per_period'] * math.sqrt(365), 2)} annualisé) : **{fr(dsr['dsr'], 2)}**, sous le seuil de 0,95.")
-    L.append(f"* Walk-forward : réglage choisi sur {day(start)} – {day(pd.Timestamp(wf['coupure']))} ({wf['variante_choisie']}, "
-             f"{pc(math.expm1(wf['exces_log_an_1re_moitie']), signed=True)} par an contre le panier), puis appliqué à la 2e moitié : "
-             f"{xm(wf['rotation_x_2e'])} contre {xm(wf['panier_x_2e'])} (panier) et {xm(wf['detenteur_x_2e'])} (détenteur) ; écart "
-             f"{pc(math.expm1(wf['exces_log_an_2e']), signed=True)} par an, PSR {fr(wf['psr_2e'], 2)}.\n")
-    L.append("## 6. Robustesse\n")
-    L.append(md_table(rob, [("cas", "variante", str), ("rotation_x", "rotation", xm), ("detenteur_x", "détenteur", xm), ("panier_x", "panier", xm),
-                            ("rotation_dd", "perte max. rotation", lambda v: pc(v)), ("rotations", "rotations", lambda v: str(int(v)))]))
+    L.append(f"* {len(grid)} réglages (`grille_variantes.csv`) : {len(grid) - len(rotating)} ne tournent jamais (ce sont des détentions, "
+             f"exclues). Parmi les {len(rotating)} autres, {n_bh} font mieux que le détenteur aux mêmes achats et "
+             f"{int(rotating['bat_panier'].sum())} mieux que le panier.")
+    L.append(f"* Meilleur réglage qui tourne : {best.name}, {xm(float(best['total_x']))} contre {xm(float(best['detenteur_x']))} pour son "
+             f"détenteur. Sharpe dégonflé (Bailey et López de Prado, Sharpe **par jour** de l'écart au détenteur, {dsr['n_trials']} séries "
+             f"distinctes) : **{fr(dsr['dsr'], 2)}**, sous le seuil de 0,95.")
+    L.append(f"* Walk-forward : sur {day(start)} – {day(pd.Timestamp(wf['coupure']))}, {wf['n_egalites']} réglages qui tournent sont à égalité "
+             f"en tête (même série de rendements). Sur la 2e moitié, ils font en médiane {xm(wf['rot_med'])}, contre {xm(wf['hold_med'])} pour "
+             f"leurs détenteurs et {xm(wf['panier_2e'])} pour le panier ; {pc(wf['part_bat_detenteur'])} battent leur détenteur "
+             f"(`walk_forward.csv`).\n")
+    L.append("## 8. Rotation systématique\n")
+    L.append("Tous les 7 ou 30 jours, détenir à parts égales les k pièces les plus basses (ou les plus hautes, ou au hasard) de leur "
+             "fourchette de 60 jours. Écart au panier : log annualisé, IC 95 % par blocs de 30 jours.\n")
+    L.append(md_table(per, [("frequence", "fréquence", str), ("k", "pièces", lambda v: str(int(v))), ("bas_x", "bas de fourchette", xm),
+                            ("haut_x", "haut de fourchette", xm), ("hasard_median_x", "au hasard (médiane)", xm), ("panier_x", "panier", xm),
+                            ("exces_bas_panier_log_an", "bas − panier, par an", lambda v: pc(math.expm1(v), 0, signed=True)),
+                            ("ic_lo", "IC bas", lambda v: pc(math.expm1(v), 0, signed=True)), ("ic_hi", "IC haut", lambda v: pc(math.expm1(v), 0, signed=True))]))
+    L.append("## 9. Robustesse et régimes\n")
+    rob2 = rob.copy()
+    rob2["cas"] = [c + (" — aucune rotation : non informatif" if n == 0 else "") for c, n in zip(rob2["cas"], rob2["rotations"])]
+    L.append(md_table(rob2, [("cas", "variante (règle F0)", str), ("rotation_x", "rotation", xm), ("detenteur_x", "détenteur", xm), ("panier_x", "panier", xm),
+                             ("rotation_dd", "perte max. rotation", lambda v: pc(v)), ("rotations", "rotations", lambda v: str(int(v)))]))
     L.append("Régimes (indice équipondéré des memecoins au-dessus ou en dessous de sa moyenne mobile 200 jours, mesuré la veille) :\n")
     L.append(md_table(reg, [("regime", "régime", str), ("strategie", "stratégie", str), ("jours", "jours", lambda v: str(int(v))),
                             ("multiple", "multiple sur ces jours", xm), ("rendement_log_an", "rendement log annualisé", lambda v: pc(v, 0, signed=True))]))
-    L.append("La rotation fait mieux que le panier en régime baissier et bien moins bien en régime haussier. Sur quelques rotations "
-             "seulement, c'est surtout le hasard de deux ou trois décisions, pas une propriété démontrée de la règle.\n")
-    L.append("## 7. Limites\n")
+    L.append("La règle F0 ne tourne que quelques fois : l'écart entre régimes reflète ces décisions, pas une propriété de la règle.\n")
+    L.append("## 10. Limites\n")
     L.append("* **Univers Binance.** Les pièces de l'auteur (CATE, NEET…) ne sont pas cotées sur Binance ; celles qui le sont (SPX, FARTCOIN, "
-             "USELESS, POPCAT, PEPE, BONK, WIF…) sont les « community coins » les plus liquides, exactement la catégorie qu'il recommande. "
-             "Être coté sur Binance est déjà une sélection (les pièces cotées avaient réussi), mais connue le jour de la cotation : pas "
-             "d'information future. Sur les DEX, beaucoup plus de pièces meurent : le biais irait contre la rotation (B en bas de fourchette "
-             "est plus souvent une pièce qui meurt).")
-    L.append("* **Bougies quotidiennes.** Un 3x réalisé et défait dans la journée échappe à la règle ; l'auteur dit détenir 38 jours en "
-             "moyenne, l'échelle quotidienne convient.")
-    L.append("* **Petits échantillons d'événements** (quelques dizaines de 3x) : les IC sont larges ; la conclusion repose sur l'absence de "
-             "tout avantage démontré, pas sur une perte démontrée.")
-    L.append("* **Une seule histoire de marché** (2024–2026, un cycle des memecoins) : la section 6 sépare haussier et baissier, mais "
-             "sur un seul cycle.\n")
-    q_exec = src_line("v *= O[i + 1, sell] / C[i, sell] * (1.0 - c)")
-    q_roll = src_line("lo = close.rolling(w, min_periods=w).min()")
-    q_uni = src_line('and "Meme" in (s.get("underlyingSubType") or [])')
-    q_where = src_line("tabs[k] = tabs[k].where(last)")
-    q_cost = src_line("v *= 1.0 - c")
-    q_fee = src_line("fee = cost * np.abs(tgt - w).sum()")
-    q_open = src_line('elif p.execution == "open":')
-    q_date = src_line('df["date"] = pd.to_datetime(df["open_ms"], unit="ms").dt.normalize()')
-    L.append("## 8. Grille en 8 points appliquée à ce backtest\n")
+             "USELESS, POPCAT, PEPE, BONK, WIF…) sont les « community coins » les plus liquides. Être coté est déjà une sélection, connue le "
+             "jour de la cotation. L'étiquette « Meme » est celle de Binance aujourd'hui : quelques memecoins étiquetés AI ou Gaming en sont "
+             "absents ; les ajouter ne change pas le verdict (relecture : la part des départs où la rotation bat le panier passerait de 19 % à 29 %).")
+    L.append("* **Bougies quotidiennes.** Un 3x fait et défait dans la journée échappe à la règle ; l'auteur dit détenir 38 jours en moyenne. "
+             "La règle F0 à 2 pièces détient bien plus longtemps : c'est pourquoi le § 6 teste d'autres déclencheurs et 5 pièces.")
+    L.append("* **Petits échantillons.** Quelques dizaines de 3x, 2 à 3 années indépendantes de départs glissants, un seul cycle des "
+             "memecoins (2024–2026). La conclusion est l'absence d'avantage démontré, pas une perte démontrée (sauf la rotation "
+             "systématique du § 8).")
+    L.append("* **Prix du perpétuel.** Pour les pièces sans spot Binance, l'écart au spot n'est pas mesuré ici (la relecture l'estime à "
+             "moins de 1 % sur les deux achats concernés).\n")
+    L.append("## 11. Grille en 8 points appliquée à ce backtest\n")
     L.append("Statut du **défaut** (PRÉSENT = le défaut existe), avec la ligne de code qui le montre.\n")
-    L.append(f"1. **Look-ahead** : ABSENT. Décision à la clôture de d, exécution le lendemain : {q_exec} ; "
-             f"signaux sur fenêtres qui finissent au jour d : {q_roll}.")
-    L.append(f"2. **Survivorship** : ABSENT par rapport à la cote Binance (retirés compris : {q_uni}) ; "
-             "PARTIEL par rapport aux DEX (seules les pièces un jour cotées sur Binance).")
-    L.append(f"3. **Repainting** : ABSENT. Fenêtres glissantes non centrées, prix figés après retrait : {q_where} ; "
-             f"le régime est mesuré la veille (`.shift(1)` dans `scripts/memecoin_rotation.py`).")
-    L.append(f"4. **Coûts** : ABSENT. Chaque vente et chaque achat paient `cost` : {q_cost} ; panier : {q_fee}.")
-    L.append(f"5. **Exécution à un prix jamais disponible** : PARTIEL. L'ouverture de J+1 vaut la clôture de J sur un marché ouvert 24 h/24 : "
-             f"{q_open} ; variante prudente à la clôture de J+1 dans la section 6 ; une pièce retirée est vendue à sa "
-             f"dernière clôture échangée (variante −50 % en section 6).")
-    L.append(f"6. **Ajustement des paramètres** : 5 paramètres (seuil, fenêtre du plus bas, fenêtre de la fourchette, bas de fourchette, "
-             f"nombre de pièces) fixés **avant** le test sur les chiffres de l'article ; 162 réglages essayés ensuite, comptés dans le Sharpe "
-             f"dégonflé et testés en walk-forward (section 5).")
-    L.append("7. **Échantillon** : PARTIEL. Hausse 2024 puis baisse : les deux régimes sont présents (section 6), mais sur un seul cycle.")
+    L.append(f"1. **Look-ahead** : ABSENT, avec une exception documentée. Décision à la clôture de d, exécution le lendemain : {q_exec} ; "
+             f"signaux sur fenêtres qui finissent au jour d : {q_roll}. Le moteur lit le statut de cotation du lendemain ({q_soon} ; "
+             f"{q_cand}) : c'est une information publique grâce au préavis de retrait de Binance ; sans effet chiffré (relecture : un seul cas "
+             f"concerné, NEIROETH).")
+    L.append(f"2. **Survivorship** : ABSENT par rapport à la cote Binance (retirés compris : {q_uni}) ; PARTIEL par rapport aux DEX.")
+    L.append(f"3. **Repainting** : ABSENT. Fenêtres glissantes non centrées, prix figés après retrait : {q_where} ; le régime est mesuré la "
+             f"veille (`.shift(1)` dans `scripts/memecoin_rotation.py`).")
+    L.append(f"4. **Coûts** : ABSENT. Chaque vente et chaque achat paient `cost` : {q_cost} ; le panier paie le même coût sur ses rééquilibrages.")
+    L.append(f"5. **Exécution à un prix jamais disponible** : PARTIEL. L'ouverture de J+1 vaut la clôture de J sur un marché ouvert 24 h/24 "
+             f"(écart médian 0,8 pb) : {q_open} ; variante à la clôture de J+1, panier compris, au § 9.")
+    L.append("6. **Ajustement des paramètres** : F0 fixée avant le test sur les chiffres de l'article ; F1–F3 ajoutées pour ne pas tester un "
+             "homme de paille ; 432 réglages essayés ensuite, comptés dans le Sharpe dégonflé (séries distinctes) et testés en walk-forward.")
+    L.append("7. **Échantillon** : PARTIEL. Hausse 2024 puis baisse : les deux régimes sont présents (§ 9), mais sur un seul cycle.")
     L.append(f"8. **Alignement** : ABSENT. Une seule source, bougies UTC 00:00 : {q_date}.\n")
+    L.append("## 12. Corrections apportées après la relecture contradictoire\n")
+    L.append("Quatre relecteurs (fuite d'information, statistiques, exécution, fidélité à l'auteur) et un contradicteur par défaut signalé. "
+             "Défauts confirmés et corrigés dans cette version :\n")
+    for item in ("les réglages qui ne tournent jamais étaient comptés comme des rotations « qui battent le panier » : ils sont exclus (§ 7) ;",
+                 "les départs glissants comptaient les égalités (aucune rotation) comme des défaites : victoires, défaites et égalités sont "
+                 "séparées, et le chevauchement des fenêtres est indiqué ;",
+                 "le test apparié moyennait des log-rendements présentés comme des rendements : il donne maintenant le gain moyen en richesse ;",
+                 "la rotation inverse et les placebos ne partaient pas des mêmes achats que la règle, et les placebos vendaient à chaque 3x : "
+                 "achats de départ et déclenchements sont maintenant identiques, seule la cible change ;",
+                 "le Sharpe dégonflé comptait 162 essais dont 72 doublons : il est calculé sur les séries distinctes des réglages qui tournent ;",
+                 "le walk-forward choisissait, par un départage arbitraire, une détention de PEPE : il choisit parmi les réglages qui tournent "
+                 "et rapporte tous les ex aequo ;",
+                 "le « repli de −70 % » était mesuré depuis le jour du 3x : il l'est depuis un sommet, sur 60 à 180 jours ;",
+                 "une formalisation unique qui ne tournait que 2 fois : 4 déclencheurs, 2 univers, 2 ou 5 pièces (§ 6) ;",
+                 "les pièces dont le retrait était annoncé restaient achetables : préavis de 5 jours ;",
+                 "le panier était rééquilibré à une date favorable et exécuté sans délai dans la variante prudente : 30 tranches décalées, "
+                 "même délai que la rotation ;",
+                 "le seuil de volume n'était pas testé : 5, 10, 20 et 50 M$ (§ 9) ; la rotation systématique vers le bas de fourchette est "
+                 "ajoutée (§ 8)."):
+        L.append(f"* {item[0].upper() + item[1:]}")
+    L.append("")
     L.append("## Fichiers\n")
-    for f, d in (("univers.csv", "les pièces, dates de cotation et de retrait, jours éligibles"),
-                 ("etats_A_B.csv", "ce qui suit un 3x (A) et un bas de fourchette (B), 30 et 60 jours"),
-                 ("rotations_appariees.csv", "décision de rotation B − A appariée, et contre une pièce quelconque"),
-                 ("rotations_appariees_60j.csv", "chaque rotation appariée à 60 jours"),
-                 ("ic_retour_moyenne.csv", "corrélations de rang signal / rendement futur"),
-                 ("portefeuilles.csv", "performances des portefeuilles"),
-                 ("rotations_regle_auteur.csv", "chaque achat et rotation de la règle de l'auteur"),
-                 ("departs_glissants_12_mois.csv", "départs mensuels tenus 12 mois"),
-                 ("grille_162_variantes.csv", "tous les réglages essayés"),
-                 ("robustesse.csv", "variantes de frais, d'exécution, d'univers"),
-                 ("regimes.csv", "par régime de marché"), ("run.json", "paramètres et résumé")):
-        L.append(f"* `{f}` : {d}")
+    for f, dsc in (("univers.csv", "les pièces, dates de cotation et de retrait, jours éligibles"),
+                   ("etats_A_B.csv", "ce qui suit un 3x (A) et un bas de fourchette (B), 30 et 60 jours"),
+                   ("baisse_depuis_sommet_A.csv", "baisse depuis un sommet après un 3x, 60 à 180 jours"),
+                   ("rotations_appariees_resume.csv", "décision de rotation appariée, résumé"),
+                   ("rotations_appariees_60j.csv", "chaque rotation appariée à 60 jours"),
+                   ("ic_retour_moyenne.csv", "corrélations de rang signal / rendement futur"),
+                   ("portefeuilles.csv", "performances des portefeuilles de la règle F0"),
+                   ("rotations_regle_testee.csv", "chaque achat et rotation de la règle F0"),
+                   ("departs_glissants_12_mois.csv", "départs mensuels tenus 12 mois"),
+                   ("formalisations.csv", "F0–F3 × univers × nombre de pièces"),
+                   ("grille_variantes.csv", "tous les réglages essayés"), ("walk_forward.csv", "réglages choisis sur la 1re moitié, 2e moitié"),
+                   ("rotation_periodique.csv", "rotation systématique"), ("robustesse_variantes.csv", "frais, exécution, retraits, volume, univers"),
+                   ("regimes.csv", "par régime de marché"), ("run.json", "paramètres et résumé")):
+        L.append(f"* `{f}` : {dsc}")
     (OUT / "README.md").write_text("\n".join(L) + "\n", encoding="utf-8")
 
 
