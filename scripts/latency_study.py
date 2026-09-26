@@ -50,6 +50,7 @@ TRIGGER_LABELS = {"tous": "toutes", "saut": "saut Binance (prix périmé)", "per
 JUMPS = (0.05, 0.10)
 MARKOUT_S = 10.0
 ASK_RANGE = (0.05, 0.95)         # asks retenus pour les opportunités (queues = surtout erreur de modèle)
+COOLDOWN_S = 1.0                 # un ordre par marché × côté et par seconde (plusieurs niveaux d'un même saut = 1 ordre)
 
 C_BLUE, C_ORANGE, C_AQUA, C_YELLOW, C_VIOLET = "#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#4a3aa7"
 MARGIN_COLORS = {0.0: C_BLUE, 0.01: C_ORANGE, 0.02: C_AQUA}
@@ -311,6 +312,11 @@ def analyse_market(slug: str) -> dict:
         if o.empty:
             continue
         o = lt.removal_cause(o, tl.trades)
+        # heure serveur Binance de la détection (réception locale − médiane locale de rx − E) -> délai entre le
+        # mouvement Binance et l'appariement du premier trade qui a consommé le niveau (heures serveur)
+        mins, med = G["rx_minus_E"].get(asset, (np.array([]), np.array([])))
+        off = lt.asof_values(mins, med, o["t_start"].to_numpy()) if mins.size else np.full(len(o), np.nan)
+        o["take_after_move_ms"] = (o["first_take_ts"] - (o["t_start"] - off)) * 1e3
         o["phase"] = eng.phase(o["t_start"].to_numpy())
         o["margin"] = margin
         opps_l.append(o)
@@ -349,7 +355,7 @@ def analyse_market(slug: str) -> dict:
             df.insert(0, "market", slug)
             df["asset"] = asset
             df["duration"] = m.duration
-    res.update({"reaction": reac, "opps": opps, "fills": fills, "pm_delays": pm_d[in_win]})
+    res.update({"reaction": reac, "opps": opps, "fills": fills, "pm_delays": pm_d[in_win], "pm_rx": tl.rx[in_win]})
     if G.get("series"):
         res["series"] = aligned_series(slug, asset, S, E, tl, px, sig, prob_at)
     return res
@@ -381,50 +387,89 @@ def aligned_series(slug: str, asset: str, S: int, E: int, tl: lt.BookTimeline, p
 # ---------------------------------------------------------------------------
 # Agrégats
 # ---------------------------------------------------------------------------
+def _half_life(lats: np.ndarray, y: np.ndarray, monotone: bool = False) -> float:
+    """Latence où la courbe ``y`` (lissée isotone si ``monotone``) tombe à la moitié de sa valeur à ℓ = 0
+    (NaN si elle n'est pas positive à ℓ = 0)."""
+    y = np.asarray(y, dtype="float64")
+    if monotone and np.isfinite(y).all():
+        y = lt.isotonic_decreasing(y)
+    if not y.size or not np.isfinite(y[0]) or y[0] <= 0:
+        return math.nan
+    return lt.breakeven_latency(lats, y - y[0] / 2.0)
+
+
+def _q(v: np.ndarray) -> list[float]:
+    v = np.asarray(v, dtype="float64")
+    v = v[~np.isnan(v)]
+    return list(np.quantile(v, [0.025, 0.5, 0.975], method="inverted_cdf")) if v.size else [math.nan] * 3
+
+
+def dedupe_mask(g: pd.DataFrame, cooldown_s: float) -> np.ndarray:
+    """Lignes de ``g`` (exécutions d'une marge et d'une origine) dont l'opportunité est retenue par
+    :func:`tradebot.latency.cooldown_mask` (un ordre par marché × côté et par ``cooldown_s``)."""
+    o = g.drop_duplicates(["market", "opp_id"])[["market", "opp_id", "side", "t_start"]]
+    keep = lt.cooldown_mask(o["t_start"].to_numpy(), (o["market"] + "/" + o["side"]).to_numpy(), cooldown_s)
+    kept = set(zip(o["market"].to_numpy()[keep], o["opp_id"].to_numpy()[keep]))
+    return np.fromiter(((m, i) in kept for m, i in zip(g["market"].to_numpy(), g["opp_id"].to_numpy())), bool, len(g))
+
+
 def pnl_tables(fills: pd.DataFrame, hours: float, n_boot: int) -> tuple[pd.DataFrame, pd.DataFrame]:
     """P&L selon ℓ (par marge, origine de l'opportunité, issue officielle et valorisation +10 s) avec IC
-    bootstrap par marché, et latence critique ℓ*."""
+    bootstrap par marché, latence critique ℓ* et demi-vies ℓ½ (avec IC).
+
+    ``ordres`` : ``1/s`` = un ordre par marché × côté et par ``COOLDOWN_S`` (plusieurs niveaux périmés du même
+    saut ne donnent qu'un ordre ; c'est la version retenue) ; ``chaque niveau`` = une exécution par niveau
+    (version d'origine : les mêmes parts peuvent être comptées plusieurs fois)."""
     rows, crit = [], []
-    for (margin, trig), g in [((m, "tous"), g) for m, g in fills.groupby("margin")] + \
-            [(k, g) for k, g in fills.groupby(["margin", "trigger"])]:
-        for value in ("pnl", "markout"):
-            gg = g if value == "markout" else g[g["pnl"].notna()]
-            if gg.empty:
-                continue
-            h = hours if value == "markout" else G["hours_resolved"]
-            curve = lt.pnl_curve(gg, value=value)
-            bs_opp = lt.bootstrap_by_group(gg, value=value, n_boot=n_boot)
-            bs_h = lt.bootstrap_by_group(gg, value=value, n_boot=n_boot, denom=h)
-            nanpair = (np.full(len(curve), np.nan), np.full(len(curve), np.nan))
-            lo_o, hi_o = np.nanpercentile(bs_opp["reps"], [2.5, 97.5], axis=0) if len(bs_opp["reps"]) else nanpair
-            lo_h, hi_h = np.nanpercentile(bs_h["reps"], [2.5, 97.5], axis=0) if len(bs_h["reps"]) else nanpair
-            curve["margin"], curve["trigger"], curve["valeur"] = margin, trig, value
-            curve["per_opp_lo"], curve["per_opp_hi"] = lo_o, hi_o
-            curve["per_hour"] = curve[f"{value}_total"] / h
-            curve["per_hour_lo"], curve["per_hour_hi"] = lo_h, hi_h
-            curve["hours"] = h
-            curve["mean_edge_fill_c"] = [100 * gg.loc[(gg["latency_ms"] == lat) & gg["filled"], "edge_fill"].mean()
-                                         for lat in curve["latency_ms"]]
-            # avantage attendu capturé selon la formule (sans bruit d'issue) : Σ parts × (P(t) − coût)
-            exp_edge = (gg["qty"] * gg["edge_fill"].fillna(0.0)).groupby(gg["latency_ms"]).sum()
-            curve["edge_per_hour"] = exp_edge.reindex(curve["latency_ms"]).to_numpy() / h
-            curve = curve.rename(columns={f"{value}_total": "total", f"{value}_per_opp": "per_opp",
-                                          f"{value}_per_share": "per_share"})
-            rows.append(curve)
-            lstar = lt.breakeven_latency(bs_opp["latencies"], bs_opp["point"], monotone=True)
-            lstar_raw = lt.breakeven_latency(bs_opp["latencies"], bs_opp["point"])
-            l_sig = lt.last_significant_latency(curve["latency_ms"].to_numpy(), lo_o)
-            reps = np.array([lt.breakeven_latency(bs_opp["latencies"], r, monotone=True) for r in bs_opp["reps"]])
-            reps = reps[~np.isnan(reps)]
-            q = (np.quantile(reps, [0.025, 0.5, 0.975], method="inverted_cdf") if reps.size else [math.nan] * 3)
-            e = curve["edge_per_hour"].to_numpy()
-            l_half = lt.breakeven_latency(curve["latency_ms"].to_numpy(), e - e[0] / 2.0) if e.size and e[0] > 0 else math.nan
-            crit.append({"margin": margin, "trigger": trig, "valeur": value, "l_star_ms": lstar, "l_star_lo_ms": q[0],
-                         "l_star_med_boot_ms": q[1], "l_star_hi_ms": q[2],
-                         "p_positive_at_0": float(np.mean(bs_opp["reps"][:, 0] > 0)) if len(bs_opp["reps"]) else math.nan,
-                         "n_opp": int((gg["latency_ms"] == gg["latency_ms"].min()).sum()),
-                         "n_markets": int(gg["market"].nunique()), "l_half_edge_ms": l_half,
-                         "l_star_raw_ms": lstar_raw, "l_sig_ms": l_sig})
+    groups = [((m, "tous"), g) for m, g in fills.groupby("margin")] + [(k, g) for k, g in fills.groupby(["margin", "trigger"])]
+    for (margin, trig), g_all in groups:
+        for mode in ("1/s", "chaque niveau"):
+            g0 = g_all[dedupe_mask(g_all, COOLDOWN_S)] if mode == "1/s" else g_all
+            g0 = g0.assign(exp_edge=g0["qty"] * g0["edge_fill"].fillna(0.0))
+            for value in ("pnl", "markout"):
+                gg = g0 if value == "markout" else g0[g0["pnl"].notna()]
+                if gg.empty:
+                    continue
+                h = hours if value == "markout" else G["hours_resolved"]
+                curve = lt.pnl_curve(gg, value=value)
+                bs_opp = lt.bootstrap_by_group(gg, value=value, n_boot=n_boot)
+                bs_h = lt.bootstrap_by_group(gg, value=value, n_boot=n_boot, denom=h)
+                bs_e = lt.bootstrap_by_group(gg, value="exp_edge", n_boot=n_boot)
+                nanpair = (np.full(len(curve), np.nan), np.full(len(curve), np.nan))
+                lo_o, hi_o = np.nanpercentile(bs_opp["reps"], [2.5, 97.5], axis=0) if len(bs_opp["reps"]) else nanpair
+                lo_h, hi_h = np.nanpercentile(bs_h["reps"], [2.5, 97.5], axis=0) if len(bs_h["reps"]) else nanpair
+                curve["margin"], curve["trigger"], curve["valeur"], curve["ordres"] = margin, trig, value, mode
+                curve["per_opp_lo"], curve["per_opp_hi"] = lo_o, hi_o
+                curve["per_hour"] = curve[f"{value}_total"] / h
+                curve["per_hour_lo"], curve["per_hour_hi"] = lo_h, hi_h
+                curve["hours"] = h
+                curve["mean_edge_fill_c"] = [100 * gg.loc[(gg["latency_ms"] == lat) & gg["filled"], "edge_fill"].mean()
+                                             for lat in curve["latency_ms"]]
+                # avantage attendu capturé selon la formule (sans bruit d'issue) : Σ parts × (P(t) − coût)
+                exp_edge = gg["exp_edge"].groupby(gg["latency_ms"]).sum()
+                curve["edge_per_hour"] = exp_edge.reindex(curve["latency_ms"]).to_numpy() / h
+                curve = curve.rename(columns={f"{value}_total": "total", f"{value}_per_opp": "per_opp",
+                                              f"{value}_per_share": "per_share"})
+                rows.append(curve)
+                lats = bs_opp["latencies"]
+                lstar = lt.breakeven_latency(lats, bs_opp["point"], monotone=True)
+                lstar_raw = lt.breakeven_latency(lats, bs_opp["point"])
+                l_sig = lt.last_significant_latency(curve["latency_ms"].to_numpy(), lo_o)
+                q = _q(np.array([lt.breakeven_latency(lats, r, monotone=True) for r in bs_opp["reps"]]))
+                # demi-vies : avantage selon la formule (brut) et valeur réalisée (lissée isotone), avec IC
+                e = curve["edge_per_hour"].to_numpy()
+                l_half = _half_life(curve["latency_ms"].to_numpy(), e)
+                qh = _q(np.array([_half_life(lats, r) for r in bs_e["reps"]]))
+                l_half_v = _half_life(lats, bs_opp["point"], monotone=True)
+                qv = _q(np.array([_half_life(lats, r, monotone=True) for r in bs_opp["reps"]]))
+                crit.append({"margin": margin, "trigger": trig, "valeur": value, "ordres": mode, "l_star_ms": lstar,
+                             "l_star_lo_ms": q[0], "l_star_med_boot_ms": q[1], "l_star_hi_ms": q[2],
+                             "p_positive_at_0": float(np.mean(bs_opp["reps"][:, 0] > 0)) if len(bs_opp["reps"]) else math.nan,
+                             "n_opp": int((gg["latency_ms"] == gg["latency_ms"].min()).sum()),
+                             "n_markets": int(gg["market"].nunique()), "l_half_edge_ms": l_half,
+                             "l_half_edge_lo_ms": qh[0], "l_half_edge_hi_ms": qh[2], "l_half_value_ms": l_half_v,
+                             "l_half_value_lo_ms": qv[0], "l_half_value_hi_ms": qv[2],
+                             "l_star_raw_ms": lstar_raw, "l_sig_ms": l_sig})
     return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(), pd.DataFrame(crit)
 
 
@@ -440,6 +485,11 @@ def wide_fills(opps: pd.DataFrame, fills: pd.DataFrame) -> pd.DataFrame:
     piv.columns = [f"{a}_{b}ms" for a, b in piv.columns]
     o = o.merge(piv.reset_index(), on=["market", "margin", "opp_id"], how="left")
     o["t_start_utc"] = pd.to_datetime(o["t_start"], unit="s", utc=True)
+    # retenue dans la version « un ordre par marché × côté et par seconde » (au sein de son origine)
+    o["retenue_1s"] = False
+    for _, g in o.groupby(["margin", "trigger"]):
+        o.loc[g.index, "retenue_1s"] = lt.cooldown_mask(g["t_start"].to_numpy(), (g["market"] + "/" + g["side"]).to_numpy(),
+                                                        COOLDOWN_S)
     return o
 
 
@@ -482,6 +532,9 @@ def opportunity_summary(opps: pd.DataFrame) -> pd.DataFrame:
                 parts.append((margin, trig, asset, g))
     for margin, trig, asset, g in parts:
         fin = g[~g["censored"]]
+        tk = fin.loc[fin["removed_by"] == "preneur", "take_after_move_ms"].to_numpy(dtype=float) \
+            if "take_after_move_ms" in fin else np.array([])
+        tk = tk[np.isfinite(tk)]
         life = fin["life_book_ms"].to_numpy(dtype=float)
         n_all = len(g)
 
@@ -499,6 +552,10 @@ def opportunity_summary(opps: pd.DataFrame) -> pd.DataFrame:
             "edge0_median_c": float(100 * g["edge0"].median()), "edge0_mean_c": float(100 * g["edge0"].mean()),
             "size0_median": float(g["size0"].median()), "size_edge_median": float(g["size_edge"].median()),
             "share_removed_by_taker": float(np.mean(fin["removed_by"] == "preneur")) if len(fin) else math.nan,
+            "take_after_move_median_ms": float(np.nanmedian(tk)) if tk.size else math.nan,
+            "take_within_200ms": float(np.mean(tk < 200.0)) if tk.size else math.nan,
+            "n_episodes": int(lt.cooldown_mask(g["t_start"].to_numpy(), (g["market"] + "/" + g["side"]).to_numpy(),
+                                               COOLDOWN_S).sum()),
             "censored": int(g["censored"].sum()),
         })
     return pd.DataFrame(rows)
@@ -523,6 +580,12 @@ def _pct_axis(ax) -> None:
     ax.yaxis.set_major_formatter(lambda v, _: f"{int(round(v * 100))} %")
 
 
+def approx(v: float) -> str:
+    """« ≈ 250 ms », ou « > 5 000 ms » sans « ≈ » devant."""
+    t = fms(v)
+    return t if t.startswith(">") or t == "—" else f"≈ {t}"
+
+
 def fms(v: float, d: int = 0) -> str:
     if v is None:
         return "—"
@@ -540,8 +603,8 @@ def plot_reaction(reac: pd.DataFrame, path: Path) -> str:
         return float(np.percentile(np.where(np.isfinite(d), d, np.inf), 50, method="inverted_cdf")) if d.size else math.nan
 
     med50, medf, medw, med90 = cmed("delay_50_ms"), cmed("delay_first_ms"), cmed("delay_placebo_ms"), cmed("delay_90_ms")
-    title = (f"Vu d'ici, le carnet Polymarket a fait la moitié du chemin ≈ {fms(med50)} après un saut de Binance "
-             f"(médiane) et 90 % après ≈ {fms(med90) if np.isfinite(med90) else 'plus de 30 s'} ; il retouche son meilleur "
+    title = (f"Vu d'ici, le carnet Polymarket a fait la moitié du chemin {approx(med50)} après un saut de Binance "
+             f"(médiane) et 90 % après {approx(med90) if np.isfinite(med90) else 'plus de 30 s'} ; il retouche son meilleur "
              f"prix dans le bon sens en {fms(medf)}, "
              f"contre {fms(medw) if np.isfinite(medw) else '> 3 s'} sans saut (placebo)")
     sub = (f"Sauts de P_formule (calculée avec Binance) d'au moins 5 points (gauche, n = {len(r5)}) et 10 points (droite, "
@@ -634,16 +697,17 @@ def plot_pnl(curve: pd.DataFrame, crit: pd.DataFrame, path: Path) -> str:
     cm = cget("saut", "markout")
     ls, lo, hi = (cm["l_star_ms"], cm["l_star_lo_ms"], cm["l_star_hi_ms"]) if cm is not None else (math.nan,) * 3
     lsig = cm["l_sig_ms"] if cm is not None else math.nan
-    lhalf = cm["l_half_edge_ms"] if cm is not None else math.nan
+    lhalf = cm["l_half_value_ms"] if cm is not None else math.nan
     if np.isfinite(ls) and ls <= 0:
         title = ("Prendre les prix périmés après un saut de Binance ne rapporte rien, même à latence nulle "
                  f"(valorisation à +{int(MARKOUT_S)} s)")
     else:
         title = ("Les prix périmés après un saut de Binance ne rapportent de façon démontrée que si l'ordre touche le "
-                 f"carnet en moins de {fms(lsig) if np.isfinite(lsig) else '—'} (vu d'ici) ; la moitié de l'avantage "
-                 f"attendu est perdue à ≈ {fms(lhalf)}, le point mort est encore incertain ({fms(lo)} – {fms(hi)})")
+                 f"carnet en moins de {fms(lsig) if np.isfinite(lsig) else '—'} (vu d'ici, valorisation à +10 s) ; la "
+                 f"moitié de la valeur est perdue à {approx(lhalf)}, le point mort est incertain ({fms(lo)} – {fms(hi)})")
     sub = ("Opportunités « saut Binance » (P_formule a monté d'au moins 1 point dans la seconde et l'avantage vient "
-           "d'apparaître). P&L par heure (pUSD ; au plus 50 parts par opportunité, frais inclus) selon la latence ℓ "
+           "d'apparaître), un ordre par marché × côté et par seconde. P&L par heure (pUSD ; au plus 50 parts par ordre, "
+           "frais inclus) selon la latence ℓ "
            f"et la marge exigée. Gauche : valorisé au milieu du carnet {int(MARKOUT_S)} s après l'achat ; droite : à "
            "l'issue officielle (marchés résolus, plus bruité). Bandes : IC 95 % bootstrap par marché (marge 0). Tirets "
            "gris : avantage attendu selon la formule au prix payé (sans bruit d'issue).")
@@ -794,7 +858,8 @@ def parse_time(s: str | None) -> float | None:
     return float((ts.tz_localize("UTC") if ts.tzinfo is None else ts).timestamp())
 
 
-def render_readme(meta, tr, cls, mk_df, reac_sum, opp_sum, curve, crit, figs) -> str:  # noqa: C901
+def render_readme(meta, tr, cls, mk_df, reac_sum, opp_sum, curve, crit, figs, curve_all=None,  # noqa: C901
+                  crit_all=None) -> str:
     from tradebot.report import fmt_number as fn
 
     ok = mk_df[mk_df["skip"].isna()] if "skip" in mk_df else mk_df
@@ -842,6 +907,18 @@ def render_readme(meta, tr, cls, mk_df, reac_sum, opp_sum, curve, crit, figs) ->
     rtt = meta["rtt_clob_ms"]
     l_here = rtt + TAKER_DELAY_MS if np.isfinite(rtt) else math.nan
     js_fill = {lat: cval("saut", "markout", lat) for lat in lt.LATENCIES_MS}
+    lhalf_v = float(js_mk["l_half_value_ms"]) if js_mk is not None else math.nan
+    drift_rng = meta.get("dB_minus_dP_10min_ms") or [math.nan, math.nan]
+
+    def rng(row, key):
+        return f"{fms(row[key + '_lo_ms'])} – {fms(row[key + '_hi_ms'])}" if row is not None else "—"
+
+    def raw_row(trig, value, lat):
+        if curve_all is None or not len(curve_all):
+            return None
+        g = curve_all[(curve_all["ordres"] == "chaque niveau") & (curve_all["valeur"] == value)
+                      & (curve_all["margin"] == 0.0) & (curve_all["trigger"] == trig) & (curve_all["latency_ms"] == lat)]
+        return g.iloc[0] if len(g) else None
 
     L = ["# Temps de réaction nécessaire pour prendre les prix périmés (Polymarket « Up or Down »)", ""]
     L.append(f"*Généré le {pd.Timestamp(meta['genere']).strftime('%d/%m/%Y %H:%M')} UTC par `scripts/latency_study.py` "
@@ -859,13 +936,16 @@ def render_readme(meta, tr, cls, mk_df, reac_sum, opp_sum, curve, crit, figs) ->
     if js_mk is not None:
         sig_txt = (f"le gain n'est **démontré** (borne basse de l'IC 95 % > 0) que jusqu'à ℓ = {fms(lsig)}"
                    if np.isfinite(lsig) else "le gain n'est démontré à **aucune** latence")
-        bl.append(f"**Temps de réaction nécessaire (vu d'ici, détection du saut Binance → ordre au carnet)** : la moitié de "
-                  f"l'avantage attendu des prix périmés est perdue à **ℓ½ ≈ {fms(lhalf)}** ; {sig_txt} ; le point mort "
-                  f"(P&L = 0, courbe lissée) est à ℓ* ≈ {fms(lstar)}, IC 95 % {fms(js_mk['l_star_lo_ms'])} – "
-                  f"{fms(js_mk['l_star_hi_ms'])} : pas encore identifié sur cet échantillon ({int(js_mk['n_opp'])} "
-                  f"opportunités « saut Binance », valorisation à +{int(MARKOUT_S)} s)."
+        bl.append(f"**Temps de réaction nécessaire (vu d'ici, détection du saut Binance → ordre au carnet)** : la valeur "
+                  f"réalisée des prix périmés (milieu du carnet +{int(MARKOUT_S)} s, courbe lissée) est divisée par deux à "
+                  f"**ℓ½ {approx(lhalf_v)}** (IC 95 % {rng(js_mk, 'l_half_value')}) ; l'avantage attendu selon la formule "
+                  f"l'est à ℓ½ {approx(lhalf)} (IC {rng(js_mk, 'l_half_edge')}) ; {sig_txt} (valorisation à "
+                  f"+{int(MARKOUT_S)} s, proxy de l'espérance, pas un prix de sortie) ; le point mort (P&L = 0, courbe lissée) "
+                  f"est à ℓ* {approx(lstar)}, IC 95 % {fms(js_mk['l_star_lo_ms'])} – {fms(js_mk['l_star_hi_ms'])} : pas "
+                  f"identifié sur cet échantillon ({int(js_mk['n_opp'])} ordres « saut Binance », un par marché × côté et "
+                  f"par seconde)."
                   + (f" À l'issue officielle (plus bruitée, {int(js_is['n_opp'])} opportunités des marchés résolus) : "
-                     f"ℓ* ≈ {fms(js_is['l_star_ms'])} (IC {fms(js_is['l_star_lo_ms'])} – {fms(js_is['l_star_hi_ms'])}), "
+                     f"ℓ* {approx(js_is['l_star_ms'])} (IC {fms(js_is['l_star_lo_ms'])} – {fms(js_is['l_star_hi_ms'])}), "
                      + (f"gain démontré jusqu'à {fms(js_is['l_sig_ms'])}." if np.isfinite(js_is["l_sig_ms"])
                         else "gain démontré à aucune latence.") if js_is is not None else ""))
         if np.isfinite(t_half):
@@ -876,12 +956,17 @@ def render_readme(meta, tr, cls, mk_df, reac_sum, opp_sum, curve, crit, figs) ->
                 verdict = "aucun gain n'est démontré, quelle que soit la vitesse"
             else:
                 verdict = "le gain démontré reste atteignable avec une infrastructure dédiée"
-            floor_txt = ("plus court que" if t_half < 260 else "comparable à" if t_half < 300 else "plus long que")
+            t_half_v = lhalf_v + rel if np.isfinite(lhalf_v) else t_half
+            floor_txt = ("plus court que" if t_half_v < 230 else "comparable à" if t_half_v < 280 else "plus long que")
             bl.append(f"**En temps réel** (mouvement Binance → appariement, = ℓ {'+' if rel >= 0 else '−'} {fn(abs(rel), 0)} ms "
-                      f"d'écart de transport Binance/Polymarket vu d'ici) : moitié de l'avantage à ≈ {fms(t_half)}, gain "
-                      f"démontré jusqu'à ≈ {fms(t_sig) if np.isfinite(t_sig) else '—'}. Tout ordre preneur attend "
-                      f"**150 ms** avant appariement, et un preneur qui lit Binance (Tokyo) et envoie à Londres ne peut pas "
-                      f"descendre sous ≈ 260–280 ms au total : ℓ½ est {floor_txt} ce plancher, et {verdict}.")
+                      f"d'écart de transport Binance/Polymarket vu d'ici) : moitié de la valeur réalisée à {approx(t_half_v)}, "
+                      f"de l'avantage selon la formule à {approx(t_half)}, gain "
+                      f"démontré jusqu'à {approx(t_sig) if np.isfinite(t_sig) else '—'}. Les latences vues d'ici sont donc "
+                      f"un **minorant** du temps réel disponible (de {fn(abs(rel), 0)} ms ; {fn(drift_rng[0], 0)} à "
+                      f"{fn(drift_rng[1], 0)} ms selon la tranche de 10 min). Tout ordre preneur attend **150 ms** avant "
+                      "appariement, et un preneur qui lit Binance (Tokyo) et envoie à Londres ne descend pas sous ≈ 230 ms "
+                      "(meilleur réseau privé publié), ≈ 265–280 ms sur le réseau d'AWS (plancher physique ≈ 200 ms, "
+                      f"`docs/research/latence_infra.md`) : ℓ½ est {floor_txt} ce plancher, et {verdict}.")
     def fd(v):
         return "plus de 30 s" if v == math.inf else fms(v)
 
@@ -898,16 +983,29 @@ def render_readme(meta, tr, cls, mk_df, reac_sum, opp_sum, curve, crit, figs) ->
         bl.append(f"**Durée de vie d'un prix périmé** (saut Binance, {int(o['n'])} niveaux) : médiane {fms(o['life_median_ms'])} "
                   f"(p75 {fms(o['life_p75_ms'])}) ; {fn(100 * o['surv_150ms'], 0)} % sont encore là à 150 ms, "
                   f"{fn(100 * o['surv_300ms'], 0)} % à 300 ms ; avantage médian {fn(o['edge0_median_c'], 1)} c/part pour "
-                  f"{fn(o['size0_median'], 0)} parts au meilleur ask ; {fn(100 * o['share_removed_by_taker'], 0)} % sont "
-                  "retirés par un preneur plus rapide, le reste annulé par le teneur.")
+                  f"{fn(o['size0_median'], 0)} parts au meilleur ask ; ces {int(o['n'])} niveaux ne font que "
+                  f"{int(o['n_episodes'])} épisodes (un saut retire souvent plusieurs niveaux en quelques ms). "
+                  f"{fn(100 * o['share_removed_by_taker'], 0)} % disparaissent par un trade, le reste est annulé par le "
+                  f"teneur ; ces trades sont appariés {fms(o['take_after_move_median_ms'])} (médiane, heures serveur) après "
+                  f"le mouvement de Binance, {fn(100 * o['take_within_200ms'], 0)} % en moins de 200 ms : avec 150 ms de délai "
+                  "preneur, ce sont des ordres partis **avant** le mouvement (flux sans rapport, ou signal plus précoce), "
+                  "pas des preneurs plus rapides que nous.")
     parts = []
-    for lat in (50, 100, 200, 500):
-        a = js_fill[lat]
+    for lat in (0, 50, 100, 200, 500):
+        a, b = js_fill[lat], cval("saut", "pnl", lat)
         if a is not None:
-            parts.append(f"{lat} ms : {ci(a)} pUSD/h (exécution {fn(100 * a['fill_rate'], 0)} %)")
+            parts.append(f"{lat} ms : {ci(a)} pUSD/h, {fn(100 * a['per_share'], 1, signed=True)} c/part (exécution "
+                         f"{fn(100 * a['fill_rate'], 0)} %) ; à l'issue {ci(b) if b is not None else '—'}")
     if parts:
-        bl.append("**Gain attendu sur les prix périmés (saut Binance, marge 0, 50 parts max., valorisé à +10 s)** — "
+        bl.append("**Gain attendu sur les prix périmés (saut Binance, marge 0, un ordre de 50 parts max. par marché × côté "
+                  "et par seconde, frais inclus ; valorisé au milieu +10 s, puis à l'issue officielle)** — "
                   + " ; ".join(parts) + ".")
+        r0, r1 = raw_row("saut", "markout", 100), js_fill[100]
+        if r0 is not None and r1 is not None:
+            bl.append(f"**Correction de revue (double comptage)** : la version d'origine simulait une exécution par *niveau* "
+                      f"périmé ({int(r0['n_opp'])} au lieu de {int(r1['n_opp'])} ordres), sans retirer du carnet les parts "
+                      f"déjà achetées : à 100 ms elle donnait {fn(r0['per_hour'], 0, signed=True)} pUSD/h, contre "
+                      f"{fn(r1['per_hour'], 0, signed=True)} pUSD/h avec un seul ordre par saut.")
     parts = []
     for lat in (50, 100, 200, 500):
         a, b = cval("tous", "markout", lat), cval("tous", "pnl", lat)
@@ -922,7 +1020,7 @@ def render_readme(meta, tr, cls, mk_df, reac_sum, opp_sum, curve, crit, figs) ->
                   f"{fn(100 * a5['fill_rate'], 0) if a5 is not None else '—'} % à 5 s : la vitesse n'y change presque rien, "
                   "leur rentabilité dépend de la justesse de la formule (voir `reports/polymarket/formule/`).")
     if len(cl_sv) and len(cl_lat):
-        bl.append(f"**Chainlink** (prix de résolution) retarde de ≈ {fms(cl_sv['lag_ms'].iloc[0])} sur Binance (heure serveur ; "
+        bl.append(f"**Chainlink** (prix de résolution) retarde de {approx(cl_sv['lag_ms'].iloc[0])} sur Binance (heure serveur ; "
                   f"{fms(cl_rx['lag_ms'].iloc[0]) if len(cl_rx) else '—'} vu d'ici), cote {fn(abs(cl_rx['basis_median_pb'].iloc[0]), 1)} pb "
                   f"{'sous' if cl_rx['basis_median_pb'].iloc[0] < 0 else 'au-dessus de'} BTCUSDT et n'arrive ici que {fms(cl_lat['median'].iloc[0])} après son horodatage : le signal, c'est "
                   "Binance ; Chainlink n'est que la règle.")
@@ -930,7 +1028,7 @@ def render_readme(meta, tr, cls, mk_df, reac_sum, opp_sum, curve, crit, figs) ->
                  f"{fms(abs(clock['offset_ms']))} (± {fms(clock.get('uncertainty_ms', math.nan))})" if clock
                  else "décalage de l'horloge locale non mesuré (--offline)")
     here_txt = (f"aller-retour HTTP vers le CLOB depuis ce conteneur {fms(rtt)}. D'ici, un ordre aurait ℓ ≈ calcul + "
-                f"aller-retour CLOB + 150 ms ≈ {fms(l_here)}." if np.isfinite(rtt) else "aller-retour vers le CLOB non mesuré.")
+                f"aller-retour CLOB + 150 ms {approx(l_here)}." if np.isfinite(rtt) else "aller-retour vers le CLOB non mesuré.")
     bl.append(f"**Transport vu d'ici** : Binance rx − E {fms(d_bn)} (médiane), carnet Polymarket rx − ts {fms(pm_med)} ; "
               f"{clock_txt} ; {here_txt}")
     bl.append(f"**Échantillon petit** : {fn(meta['hours'], 1)} h, {n_mk} marchés ({n_res} résolus) ; IC larges. Relancer "
@@ -950,10 +1048,14 @@ def render_readme(meta, tr, cls, mk_df, reac_sum, opp_sum, curve, crit, figs) ->
 
     L += ["## Comment atteindre ce temps de réaction", ""]
     L.append("> Description technique générique, **inutilisable légalement depuis la France** (blocage ANJ, close-only, "
-             "CGU). Aucune méthode de contournement n'est donnée ni envisagée.")
+             "CGU). Le Royaume-Uni, où se trouve le moteur du CLOB, est lui aussi « close-only » : un serveur à Londres "
+             "reçoit le même refus. Ces budgets sont donc des bornes physiques, pas une architecture déployable ; "
+             "l'éligibilité dépend de la personne et de sa juridiction, pas de l'emplacement d'une machine. Aucune méthode "
+             "de contournement n'est donnée ni envisagée. Détail des mesures : `docs/research/latence_infra.md`.")
     L.append("")
-    L.append(f"Budget « mouvement Binance → ordre apparié », à comparer aux ≈ {fms(t_half)} au bout desquels la moitié de "
-             f"l'avantage est perdue (gain démontré jusqu'à ≈ {fms(t_sig)}) :")
+    t_half_v2 = (lhalf_v + rel) if np.isfinite(lhalf_v) else t_half
+    L.append(f"Budget « mouvement Binance → ordre apparié », à comparer aux {approx(t_half_v2)} au bout desquels la moitié de "
+             f"la valeur réalisée est perdue (gain démontré jusqu'à {approx(t_sig)}) :")
     L.append("")
     L.append("| étape | ordre de grandeur | levier |")
     L.append("|---|---|---|")
@@ -962,30 +1064,33 @@ def render_readme(meta, tr, cls, mk_df, reac_sum, opp_sum, curve, crit, figs) ->
              "SBE), sans CDN ni proxy |")
     L.append("| calcul de P_formule et décision | < 1 ms | formule fermée (Φ), moyennes glissantes incrémentales, σ "
              "tenu à jour à chaque seconde |")
-    L.append("| signature EIP-712 de l'ordre + en-têtes HMAC | ≈ 1–5 ms en Python, < 0,5 ms en natif | clé en mémoire, "
-             "bibliothèque native, ordres préparés d'avance aux prix probables |")
+    L.append("| signature EIP-712 de l'ordre + en-têtes HMAC | ≈ 0,54 ms avec `py-clob-client-v2`, ≈ 0,05 ms en chemin "
+             "direct (keccak + libsecp256k1), 0 si l'ordre est pré-signé (mesuré, `docs/research/latence_infra.md`) | clé "
+             "en mémoire, ordres préparés d'avance aux prix probables |")
     L.append("| serveur du robot → CLOB (AWS eu-west-2, Londres) | < 2 ms dans la même région ; ≈ 100–120 ms depuis "
              f"Tokyo ; aller-retour {fms(rtt)} depuis ce conteneur | connexion HTTP/2 déjà ouverte (keep-alive) |")
     L.append("| délai preneur Polymarket (marchés crypto) | **150 ms, incompressible** (depuis le 04/09/2026) | aucun : "
              "c'est un ralentisseur qui laisse aux teneurs le temps d'annuler |")
     L.append("")
-    L.append("Tokyo ↔ Londres coûte ≈ 100–120 ms dans un sens, à payer une fois (sur le flux Binance ou sur l'ordre). Le "
-             "meilleur total réaliste pour un **preneur** qui lit Binance est donc ≈ 110 + 150 ≈ 260–280 ms. Les **teneurs "
+    L.append("Tokyo ↔ Londres coûte ≈ 105 ms dans un sens sur le réseau d'AWS, ≈ 70 ms sur le meilleur réseau privé publié "
+             "et 47 ms en fibre en ligne droite (qui n'existe pas), à payer une fois (sur le flux Binance ou sur l'ordre). "
+             "Le meilleur total réaliste pour un **preneur** qui lit Binance est donc ≈ 230 ms (réseau privé), ≈ 265–280 ms "
+             "sur AWS ; plancher physique ≈ 200 ms. Les **teneurs "
              "de marché**, eux, annulent sans délai : ce sont eux qui gagnent la course, et la plupart des prix périmés "
              "disparaissent avant qu'un preneur puisse les toucher. Quand le temps utile est sous 150 ms, aucune "
              "infrastructure ne suffit en preneur : il faudrait tenir le carnet (être celui qui réévalue ses prix le plus vite), ce qui "
              "change de métier (inventaire, sélection adverse, remises maker) — voir `reports/polymarket/maker_live/`.")
     L.append("")
     if np.isfinite(lhalf) and np.isfinite(l_here):
-        L.append(f"**Depuis ce conteneur** (derrière un proxy, côte est des États-Unis d'après les délais), ℓ ≈ aller-retour "
-                 f"CLOB + 150 ms ≈ {fms(l_here)}, contre ℓ½ ≈ {fms(lhalf)} et un gain démontré jusqu'à "
+        L.append(f"**Depuis ce conteneur** (Google Cloud us-central1, Iowa, sortie par un proxy ; le CLOB y répond d'ailleurs "
+                 f"403 à tout ordre), ℓ ≈ aller-retour CLOB + 150 ms {approx(l_here)}, contre ℓ½ {approx(lhalf_v)} et un gain "
+                 "démontré jusqu'à "
                  f"{fms(lsig) if np.isfinite(lsig) else '— (aucun)'} : "
-                 + ("on arriverait après la disparition de l'essentiel des prix périmés." if l_here > lhalf else
+                 + ("on arriverait après la disparition de l'essentiel des prix périmés." if l_here > lhalf_v else
                     "en théorie suffisant, mais sans marge.")
-                 + " Pour descendre plus bas, les seuls leviers réels sont la **géographie** (un serveur dans la région du "
-                 "moteur du CLOB, ou près de Binance, reliés par le chemin réseau le plus court), un **flux Binance direct** "
-                 "et un **code natif** qui signe et envoie l'ordre en moins d'une milliseconde ; le délai de 150 ms, lui, "
-                 "ne se négocie pas.")
+                 + " En théorie, les seuls leviers sont la **géographie** (distance au moteur de Binance et à celui du CLOB), "
+                 "un **flux Binance direct** et des **ordres pré-signés** envoyés sur une connexion déjà ouverte ; le délai de "
+                 "150 ms, lui, ne se négocie pas, et aucun de ces leviers ne fait passer un preneur sous ≈ 200 ms.")
         L.append("")
 
     L += ["## Tableaux", "", "### Latence critique ℓ* (P&L = 0) et demi-vie de l'avantage", ""]
@@ -993,24 +1098,31 @@ def render_readme(meta, tr, cls, mk_df, reac_sum, opp_sum, curve, crit, figs) ->
         c = crit.copy()
         c["valeur"] = c["valeur"].map({"pnl": "issue officielle", "markout": "valorisé à +10 s"})
         c["margin"] = (100 * c["margin"]).round(0).astype(int).astype(str) + " c"
-        for col in ("l_star_ms", "l_star_lo_ms", "l_star_hi_ms", "l_half_edge_ms", "l_star_raw_ms", "l_sig_ms"):
+        for col in ("l_star_ms", "l_star_lo_ms", "l_star_hi_ms", "l_half_edge_ms", "l_star_raw_ms", "l_sig_ms",
+                    "l_half_value_ms"):
             c[col] = c[col].map(lambda v: "aucune" if isinstance(v, float) and math.isnan(v) else fms(v))
+        c["ic_half_v"] = [f"{fms(a)} – {fms(b)}" for a, b in zip(crit["l_half_value_lo_ms"], crit["l_half_value_hi_ms"])]
+        c["ic_half_e"] = [f"{fms(a)} – {fms(b)}" for a, b in zip(crit["l_half_edge_lo_ms"], crit["l_half_edge_hi_ms"])]
         c = c[c["trigger"].isin(["saut", "tous"])].sort_values(["trigger", "valeur", "margin"])
         L.append(md(c[["trigger", "margin", "valeur", "l_star_ms", "l_star_lo_ms", "l_star_hi_ms", "l_star_raw_ms",
-                       "l_sig_ms", "l_half_edge_ms", "p_positive_at_0", "n_opp", "n_markets"]].rename(columns={
+                       "l_sig_ms", "l_half_value_ms", "ic_half_v", "l_half_edge_ms", "ic_half_e", "p_positive_at_0",
+                       "n_opp", "n_markets"]].rename(columns={
             "trigger": "origine", "margin": "marge", "valeur": "valorisation", "l_star_ms": "ℓ* (isotone)",
             "l_star_lo_ms": "IC bas", "l_star_hi_ms": "IC haut", "l_star_raw_ms": "ℓ* (brut)",
-            "l_sig_ms": "gain démontré jusqu'à", "l_half_edge_ms": "ℓ½ avantage", "p_positive_at_0": "P(P&L > 0 à ℓ = 0)",
-            "n_opp": "opportunités", "n_markets": "marchés"}), {"P(P&L > 0 à ℓ = 0)": "0%"}))
+            "l_sig_ms": "gain démontré jusqu'à", "l_half_value_ms": "ℓ½ valeur", "ic_half_v": "IC ℓ½ valeur",
+            "l_half_edge_ms": "ℓ½ avantage", "ic_half_e": "IC ℓ½ avantage", "p_positive_at_0": "P(P&L > 0 à ℓ = 0)",
+            "n_opp": "ordres", "n_markets": "marchés"}), {"P(P&L > 0 à ℓ = 0)": "0%"}))
         L.append("")
         L.append("ℓ* : première latence où le P&L moyen par opportunité devient ≤ 0 (interpolation linéaire sur la grille "
                  "0–5 000 ms), après régression isotone décroissante de la courbe (en espérance, arriver plus tard ne peut "
                  "pas rapporter plus ; « brut » : sans ce lissage, sensible au bruit) ; « 0 ms » : jamais positif ; "
                  "« > 5 000 ms » : encore positif à 5 s. « gain démontré jusqu'à » : plus grande latence de la grille "
                  "jusqu'à laquelle la borne basse de l'IC 95 % reste > 0 (« aucune » : pas même à 0 ms). IC : percentiles 2,5 et "
-                 f"97,5 % sur {meta['boot']} tirages bootstrap des marchés. ℓ½ avantage : latence à laquelle l'avantage "
-                 "attendu capturé selon la formule (Σ parts × (P(t) − coût), sans bruit d'issue) tombe à la moitié de sa "
-                 "valeur à ℓ = 0. Origines « persistante » et « carnet » : `latence_critique.csv`.")
+                 f"97,5 % sur {meta['boot']} tirages bootstrap des marchés. ℓ½ valeur : latence à laquelle le P&L moyen "
+                 "(courbe lissée isotone) tombe à la moitié de sa valeur à ℓ = 0 ; ℓ½ avantage : idem pour l'avantage "
+                 "attendu selon la formule (Σ parts × (P(t) − coût), sans bruit d'issue, plus optimiste car P(t) n'est pas "
+                 "remis à jour). Un ordre par marché × côté et par seconde ; version « un ordre par niveau » et origines "
+                 "« persistante » et « carnet » : `latence_critique.csv` (colonne `ordres`).")
         L.append("")
     L += ["### P&L selon la latence (marge 0)", ""]
     if len(curve):
@@ -1069,21 +1181,25 @@ def render_readme(meta, tr, cls, mk_df, reac_sum, opp_sum, curve, crit, figs) ->
         os_ = opp_sum[(opp_sum["margin"] == 0.0)].copy()
         keep = ["trigger", "asset", "n", "n_markets", "life_median_ms", "life_p75_ms", "surv_50ms", "surv_150ms",
                 "surv_300ms", "surv_1s", "edge_life_median_ms", "edge0_median_c", "size0_median", "size_edge_median",
-                "share_removed_by_taker"]
+                "n_episodes", "share_removed_by_taker", "take_after_move_median_ms", "take_within_200ms"]
         L.append(md(os_[keep].rename(columns={
             "trigger": "origine", "asset": "actif", "n_markets": "marchés", "life_median_ms": "vie méd. (ms)",
             "life_p75_ms": "p75 (ms)", "surv_50ms": "> 50 ms", "surv_150ms": "> 150 ms", "surv_300ms": "> 300 ms",
             "surv_1s": "> 1 s", "edge_life_median_ms": "avantage > 0 (ms, méd.)", "edge0_median_c": "avantage (c/part)",
-            "size0_median": "parts au meilleur ask", "size_edge_median": "parts rentables",
-            "share_removed_by_taker": "pris par un preneur"}),
+            "size0_median": "parts au meilleur ask", "size_edge_median": "parts rentables", "n_episodes": "épisodes (1/s)",
+            "share_removed_by_taker": "pris par un trade", "take_after_move_median_ms": "trade après Binance (ms, méd.)",
+            "take_within_200ms": "trade < 200 ms"}),
             {"vie méd. (ms)": 0, "p75 (ms)": 0, "> 50 ms": "0%", "> 150 ms": "0%", "> 300 ms": "0%", "> 1 s": "0%",
              "avantage > 0 (ms, méd.)": 0, "avantage (c/part)": 1, "parts au meilleur ask": 0, "parts rentables": 0,
-             "pris par un preneur": "0%"}))
+             "pris par un trade": "0%", "trade après Binance (ms, méd.)": 0, "trade < 200 ms": "0%"}))
         L.append("")
         L.append("Origine : **saut** = P_formule a monté d'au moins 1 point dans la seconde et l'avantage n'existait pas "
                  "1 s plus tôt (prix périmé au sens strict) ; **persistante** = l'avantage existait déjà 1 s plus tôt "
                  "(désaccord durable entre la formule et le marché, ou niveau qui clignote) ; **carnet** = un ask moins cher "
-                 "est apparu sans mouvement de Binance. Marges 1 c et 2 c : `opportunites_resume.csv`.")
+                 "est apparu sans mouvement de Binance. « trade après Binance » : appariement (heure serveur Polymarket) du "
+                 "premier trade qui a consommé le niveau, moins l'heure serveur Binance de la détection (réception locale "
+                 "corrigée de la médiane de rx − E de la minute) ; avec 150 ms de délai preneur, un trade apparié moins de "
+                 "≈ 200 ms après le mouvement n'y réagit pas. Marges 1 c et 2 c : `opportunites_resume.csv`.")
         L.append("")
     L += ["### Latences de transport (réception locale − horodatage serveur)", ""]
     L.append(md(tr[["source", "mesure", "n", "p10", "median", "p90", "note"]], {"p10": 0, "median": 0, "p90": 0}))
@@ -1135,21 +1251,28 @@ def render_readme(meta, tr, cls, mk_df, reac_sum, opp_sum, curve, crit, figs) ->
              "meilleur ask de ce carnet si P_côté(t) − coût(ask) > marge (ordre limite calculé à t), quantité min(taille au "
              "meilleur ask, 50) ; P&L = parts × (1{côté gagnant} − ask − frais) à l'issue officielle (`meta.json`, sinon "
              f"gamma en lecture seule), et valorisation au milieu du côté {int(MARKOUT_S)} s après l'achat (à l'issue si la "
-             f"clôture tombe avant). IC : bootstrap des marchés ({meta['boot']} tirages).")
+             f"clôture tombe avant). **Un ordre par marché × côté et par {fn(COOLDOWN_S, 0)} s** : un saut de Binance fait "
+             "apparaître plusieurs niveaux périmés en quelques ms, un robot n'envoie qu'un ordre, et la simulation ne retire "
+             "pas du carnet les parts déjà achetées (sans ce filtre, les mêmes parts seraient comptées plusieurs fois). "
+             f"IC : bootstrap des marchés ({meta['boot']} tirages).")
     L.append("")
     L += ["### Biais de notre propre latence (et comment il déplace ℓ*)", ""]
-    L.append(f"On voit Binance avec un retard d_B et le carnet avec un retard d_P (≈ 50–150 ms chacun, inséparables sans "
-             "horloge commune). Un mouvement Binance à l'instant réel τ est détecté ici à τ + d_B ; un état du carnet à "
-             "l'instant réel x est vu ici à x + d_P. Simuler « ordre au carnet vu à t + ℓ » revient à apparier l'ordre à "
-             "l'instant réel τ + d_B + ℓ − d_P : **le temps réel disponible vaut T = ℓ* + (d_B − d_P)**, et d_B − d_P ne "
-             f"dépend pas de l'horloge locale : médiane(rx − E Binance) − médiane(rx − ts CLOB) = {fn(d_bn, 0)} − "
-             f"({fn(pm_med, 0)}) = {fn(rel, 0, signed=True)} ms : les latences mesurées ici (ℓ*, ℓ½, gain démontré) "
-             f"{'sous-estiment' if rel > 0 else 'surestiment'} donc le temps réel de ≈ {fn(abs(rel), 0)} ms. Autres biais : "
-             "(i) des teneurs qui lisent Binance plus près de Tokyo réagissent plus tôt que ce que nous voyons (les délais de "
-             "réaction « vus d'ici » sont raccourcis de leur avance, ℓ* réel encore plus court) ; (ii) les ordres des autres "
-             "preneurs sont dans les données (le niveau disparaît), mais notre ordre ne déplace pas le carnet (50 parts max., "
-             "sans impact) ; (iii) un teneur qui annule dès qu'il voit un ordre preneur arriver (pendant le délai de 150 ms) "
-             "rendrait l'exécution réelle pire que simulée.")
+    L.append(f"On voit Binance avec un retard d_B et le carnet avec un retard d_P (≈ 90–120 ms et ≈ 65–85 ms une fois "
+             "l'horloge corrigée, voir `docs/research/latence_infra.md`). Un mouvement Binance à l'instant réel τ est "
+             "détecté ici à τ + d_B ; un état du carnet à l'instant réel x est vu ici à x + d_P. Simuler « ordre au carnet "
+             "vu à t + ℓ » revient à apparier l'ordre à l'instant réel τ + d_B + ℓ − d_P : **le temps réel disponible vaut "
+             "T = ℓ + (d_B − d_P)**, et d_B − d_P ne dépend pas de l'horloge locale : médiane(rx − E Binance) − "
+             f"médiane(rx − ts CLOB) = {fn(d_bn, 0)} − ({fn(pm_med, 0)}) = {fn(rel, 0, signed=True)} ms, stable de "
+             f"{fn(drift_rng[0], 0)} à {fn(drift_rng[1], 0)} ms d'une tranche de 10 min à l'autre alors que l'horloge "
+             f"locale dérive de {fn(meta.get('local_clock_drift_ms') or math.nan, 0, signed=True)} ms sur la période "
+             "(`derive_horloge.csv`). **Les latences mesurées ici (ℓ*, ℓ½, gain démontré) sont donc des minorants du temps "
+             f"réel disponible, de ≈ {fn(abs(rel), 0)} ms.** L'avance des teneurs qui lisent Binance plus près de Tokyo est "
+             "déjà dans les données (leurs annulations apparaissent dans le carnet) : elle ne déplace pas ℓ* davantage. "
+             "Incertitudes restantes : (i) si le CLOB horodate ses messages g ms après l'événement du moteur, le temps réel "
+             "est plus court de g ; (ii) la synchronisation des horloges des serveurs Binance et Polymarket (quelques ms, "
+             "non mesurable ici) ; (iii) notre ordre ne déplace pas le carnet (un ordre de 50 parts au plus par saut) ; "
+             "(iv) un teneur qui annulerait en voyant arriver un ordre preneur pendant les 150 ms rendrait l'exécution "
+             "réelle pire que simulée.")
     L.append("")
     L += ["## Limites", ""]
     L.append(f"* **n petit** : {fn(meta['hours'], 1)} h de données communes aux deux collecteurs, {n_mk} marchés, {n_res} avec "
@@ -1162,10 +1285,20 @@ def render_readme(meta, tr, cls, mk_df, reac_sum, opp_sum, curve, crit, figs) ->
     L.append("* P_formule suppose un log-prix sans tendance, σ constant jusqu'à E et Chainlink = Binance décalé ; elle se "
              "trompe quand Chainlink s'écarte de Binance (sources agrégées), surtout près de F = K. Les désaccords "
              "persistants sont surtout des erreurs de modèle ou des différences de σ, pas des prix périmés.")
-    L.append("* 150 ms de délai preneur (documenté pour les marchés crypto depuis le 04/09/2026, non mesuré ici) : les "
+    L.append("* 150 ms de délai preneur (documenté pour les marchés crypto depuis le 04/09/2026, non mesurable ici) : les "
              "latences ℓ < 150 ms ne sont atteignables par personne en preneur ; elles servent de référence. Le décalage "
-             "d'horloge locale est estimé par une seule requête Binance (± la moitié de l'aller-retour) : seules les "
-             "différences entre sources sont sûres.")
+             "d'horloge locale est estimé par une seule requête Binance (± la moitié de l'aller-retour) et l'horloge dérive "
+             "(`derive_horloge.csv`) : seules les différences entre sources sont sûres. Sur plusieurs jours, la dérive "
+             "déplacerait aussi le retard Chainlink estimé sur l'horloge locale ; le relancer par tranches (`--since`/`--until`).")
+    L.append("* K et F viennent de Binance décalé, pas de Chainlink : sur les marchés BTC où le flux Chainlink est complet, "
+             "l'erreur de F − K est de signe constant (`chainlink_erreur_suivi.csv`, ≈ −0,3 pb en moyenne sur une poignée de "
+             "marchés), du même ordre que l'écart-type de F − K près de F = K un samedi calme (σ ≈ 0,2 pb/√s) : "
+             "P_formule peut s'y tromper de plusieurs points. Pour BTC, K Chainlink est connu ≈ 1,4 s après S (RTDS) : "
+             "l'utiliser supprimerait la moitié de cette erreur.")
+    L.append("* Choix faits après coup : l'origine « saut » est mise en avant parce que l'ensemble des opportunités perd ; "
+             "la définition (P a monté d'au moins 1 point dans la seconde, avantage absent 1 s plus tôt) est fixée a priori, "
+             "mais les nombreuses variantes (3 marges × 4 origines × 2 valorisations × 12 latences) ne sont pas corrigées "
+             "pour tests multiples. Une seule matinée de samedi : liquidité et volatilité de week-end.")
     L.append("")
     L += ["## Relancer", ""]
     L.append("```bash\n. .venv/bin/activate\npython scripts/latency_study.py              # tout ce qui est disponible\n"
@@ -1217,7 +1350,10 @@ def main() -> int:
     ap.add_argument("--offline", action="store_true", help="pas de requête réseau (horloge, gamma, historique σ)")
     ap.add_argument("--sigma-factor", type=float, default=SIGMA_FACTOR)
     ap.add_argument("--no-series", action="store_true", help="ne pas écrire series_alignees_1s.csv.gz")
+    ap.add_argument("--cooldown", type=float, default=COOLDOWN_S,
+                    help="un ordre par marché × côté et par N s (défaut 1 ; 0 = un ordre par niveau périmé)")
     args = ap.parse_args()
+    globals()["COOLDOWN_S"] = args.cooldown
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     t_run = time.time()
     out = Path(args.out)
@@ -1326,8 +1462,14 @@ def main() -> int:
             u = cl[~cl["snapshot"]].sort_values("rx")
             a["cl"] = (u["rx"].to_numpy(), u["value"].to_numpy(), u["ts"].to_numpy())
         aux[asset] = a
+    rx_minus_E = {}
+    for asset, sym in SYMBOL.items():
+        tr_ = cex["binance"].get(sym, {}).get("trades")
+        if tr_ is not None and len(tr_):
+            mm = (tr_["rx"] - tr_["E"]).groupby((tr_["rx"] // 60) * 60).median()
+            rx_minus_E[asset] = (mm.index.to_numpy(dtype="float64"), mm.to_numpy(dtype="float64"))
     G.update(prices=prices, sigma=sigma, lag_s=lag_s, extra_sd=extra_sd, outcomes=outcomes, aux=aux,
-             series=not args.no_series)
+             series=not args.no_series, rx_minus_E=rx_minus_E)
     slugs = [mk["slug"] for mk in markets]
     t_m = time.time()
     if args.jobs > 1:
@@ -1342,7 +1484,8 @@ def main() -> int:
     reac = pd.concat([r["reaction"] for r in ok if len(r["reaction"])], ignore_index=True)
     opps = pd.concat([r["opps"] for r in ok if len(r["opps"])], ignore_index=True)
     fills = pd.concat([r["fills"] for r in ok if len(r["fills"])], ignore_index=True)
-    mk_df = pd.DataFrame([{k: v for k, v in r.items() if k not in ("reaction", "opps", "fills", "pm_delays", "series")}
+    mk_df = pd.DataFrame([{k: v for k, v in r.items() if k not in ("reaction", "opps", "fills", "pm_delays", "pm_rx",
+                                                                  "series")}
                           for r in results])
     mk_df["official_up"] = mk_df["slug"].map(outcomes)
     mk_df["binance_agrees"] = np.where(mk_df["official_up"].notna() & mk_df["binance_says_up"].notna(),
@@ -1364,6 +1507,16 @@ def main() -> int:
         pm_d.setdefault(key, []).append(r["pm_delays"])
     pm_d = {k: np.concatenate(v) for k, v in pm_d.items()}
     tr = transport_table(cex, pm_d, clock)
+    # stabilité de d_B − d_P (indépendant de l'horloge locale) par tranches de 10 min
+    pm_all = pd.DataFrame({"rx": np.concatenate([r["pm_rx"] for r in ok]),
+                           "d": np.concatenate([r["pm_delays"] for r in ok])})
+    bn_all = pd.concat([pd.DataFrame({"rx": d["trades"]["rx"], "d": (d["trades"]["rx"] - d["trades"]["E"]) * 1e3})
+                        for d in cex["binance"].values() if len(d["trades"])], ignore_index=True)
+    drift = pd.DataFrame({"binance_rx_moins_E_ms": bn_all.groupby((bn_all["rx"] // 600) * 600)["d"].median(),
+                          "clob_rx_moins_ts_ms": pm_all.groupby((pm_all["rx"] // 600) * 600)["d"].median()}).dropna()
+    drift["dB_moins_dP_ms"] = drift["binance_rx_moins_E_ms"] - drift["clob_rx_moins_ts_ms"]
+    drift.index = pd.to_datetime(drift.index, unit="s", utc=True)
+    drift.index.name = "tranche_10min"
 
     # --- P&L ----------------------------------------------------------------
     if len(fills):
@@ -1383,6 +1536,7 @@ def main() -> int:
     from tradebot.report import write_csv, write_json
 
     write_csv(tr, out / "latences_transport.csv")
+    write_csv(drift.reset_index(), out / "derive_horloge.csv")
     if len(cls["scan"]):
         write_csv(cls["scan"], out / "chainlink_binance_correlation.csv")
     write_csv(cls["summary"], out / "chainlink_binance_resume.csv")
@@ -1394,8 +1548,8 @@ def main() -> int:
     write_csv(reac_sum, out / "reaction_carnet_resume.csv")
     opp_cols = ["market", "asset", "duration", "margin", "trigger", "side", "phase", "t_start", "ask0", "size0",
                 "size_edge", "p_side", "edge0", "p_side_1s", "edge_1s", "life_book_ms", "life_edge_ms", "censored",
-                "removed_by", "taken_size"]
-    big = dict(index=False, float_format="%.13g", compression="gzip")
+                "removed_by", "taken_size", "first_take_rx", "first_take_ts", "take_after_move_ms"]
+    big = dict(index=False, float_format="%.15g", compression="gzip")   # t_start à 10 µs près (rafales Binance)
     (opps[[c for c in opp_cols if c in opps]] if len(opps) else opps).to_csv(out / "opportunites.csv.gz", **big)
     opp_sum = opportunity_summary(opps)
     write_csv(opp_sum, out / "opportunites_resume.csv")
@@ -1413,8 +1567,10 @@ def main() -> int:
     figs = {}
     figs["reaction"] = plot_reaction(reac, out / "reaction_carnet.png") if len(reac) else ""
     figs["lifetime"] = plot_lifetime(opps, out / "duree_vie_prix_perimes.png") if len(opps) else ""
-    figs["pnl"] = plot_pnl(curve, crit, out / "pnl_vs_latence.png") if len(curve) else ""
-    figs["fill"] = plot_fill(curve, out / "execution_vs_latence.png") if len(curve) else ""
+    curve_d = curve[curve["ordres"] == "1/s"] if len(curve) else curve
+    crit_d = crit[crit["ordres"] == "1/s"] if len(crit) else crit
+    figs["pnl"] = plot_pnl(curve_d, crit_d, out / "pnl_vs_latence.png") if len(curve_d) else ""
+    figs["fill"] = plot_fill(curve_d, out / "execution_vs_latence.png") if len(curve_d) else ""
     figs["chainlink"] = (plot_chainlink(cls["scan"], cls["summary"], out / "chainlink_vs_binance.png")
                          if len(cls["scan"]) else "")
     figs["transport"] = plot_transport(tr, out / "latences_transport.png")
@@ -1423,11 +1579,17 @@ def main() -> int:
             "bn_end": bn_end, "n_markets": len(ok), "hours": hours, "hours_resolved": hours_res, "lag_ms": lag_ms,
             "extra_sd_pb": extra_sd * 1e4, "extra_sd_source": extra_src, "sigma_factor": args.sigma_factor,
             "sigma_warm_start": warm, "clock": clock, "rtt_clob_ms": rtt, "runtime_s": time.time() - t_run,
-            "jobs": args.jobs, "boot": args.boot, "markets": [r["slug"] for r in ok]}
+            "jobs": args.jobs, "boot": args.boot, "cooldown_s": COOLDOWN_S,
+            "dB_minus_dP_10min_ms": [float(drift["dB_moins_dP_ms"].min()), float(drift["dB_moins_dP_ms"].max())]
+            if len(drift) else None,
+            "local_clock_drift_ms": float(drift["binance_rx_moins_E_ms"].iloc[-1] - drift["binance_rx_moins_E_ms"].iloc[0])
+            if len(drift) > 1 else None,
+            "markets": [r["slug"] for r in ok]}
     write_json(out / "run.json", meta)
     from tradebot.report import write_text
 
-    write_text(out / "README.md", render_readme(meta, tr, cls, mk_df, reac_sum, opp_sum, curve, crit, figs))
+    write_text(out / "README.md", render_readme(meta, tr, cls, mk_df, reac_sum, opp_sum, curve_d, crit_d, figs,
+                                                curve_all=curve, crit_all=crit))
     log.info("terminé en %.0f s -> %s", time.time() - t_run, out)
     return 0
 

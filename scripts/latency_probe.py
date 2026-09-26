@@ -1259,47 +1259,51 @@ def cmd_compute(args) -> dict:
             res["ws_loopback_uvloop_us"] = "uvloop non installé"
     except Exception as exc:  # noqa: BLE001
         res["ws_loopback_error"] = str(exc)[:200]
-    # Surcoût d'un client HTTP (connexion chaude) vs socket brut, même hôte, même chemin
+    # Surcoût d'un client HTTP (connexion chaude) vs socket brut : même hôte, même chemin, requêtes
+    # entrelacées (une par client à chaque tour) pour que la variance du réseau soit commune.
     if not args.no_network:
-        rows = {}
+        url = "https://clob.polymarket.com/time"
+        clients: dict = {}
+        rows: dict = {}
         try:
             import httpx
-            with httpx.Client(http2=True, timeout=10, headers={"User-Agent": UA}) as cl:
-                cl.get("https://clob.polymarket.com/time")
-                ts = []
-                for _ in range(args.n_client):
-                    t0 = perf()
-                    cl.get("https://clob.polymarket.com/time")
-                    ts.append((perf() - t0) * 1e3)
-                    time.sleep(0.05)
-                rows["httpx_http2_clob_time_ms"] = stats(ts)
+            cl = httpx.Client(http2=True, timeout=10, headers={"User-Agent": UA})
+            clients["httpx_http2_clob_time_ms"] = (cl.get, cl.close)
         except Exception as exc:  # noqa: BLE001
             rows["httpx_http2_clob_time_ms"] = f"indisponible ({str(exc)[:80]})"
         try:
             import requests
-            with requests.Session() as se:
-                se.headers["User-Agent"] = UA
-                se.get("https://clob.polymarket.com/time", timeout=10)
-                ts = []
-                for _ in range(args.n_client):
-                    t0 = perf()
-                    se.get("https://clob.polymarket.com/time", timeout=10)
-                    ts.append((perf() - t0) * 1e3)
-                    time.sleep(0.05)
-                rows["requests_clob_time_ms"] = stats(ts)
+            se = requests.Session()
+            se.headers["User-Agent"] = UA
+            clients["requests_clob_time_ms"] = (lambda u, se=se: se.get(u, timeout=10), se.close)
         except Exception as exc:  # noqa: BLE001
             rows["requests_clob_time_ms"] = f"indisponible ({str(exc)[:80]})"
-        c = RawHttps("clob.polymarket.com", "proxy" if proxy_addr() else "direct")
+        raw = RawHttps("clob.polymarket.com", "proxy" if proxy_addr() else "direct")
+        clients["raw_socket_clob_time_ms"] = (lambda u, raw=raw: raw.request("GET", "/time"), raw.close)
+        samples: dict[str, list] = {k: [] for k in clients}
         try:
-            c.connect()
-            c.request("GET", "/time")
-            ts = []
+            for get, _ in clients.values():
+                get(url)  # connexion ouverte hors mesure
             for _ in range(args.n_client):
-                ts.append(c.request("GET", "/time")["total_ms"])
-                time.sleep(0.05)
-            rows["raw_socket_clob_time_ms"] = stats(ts)
+                for k, (get, _) in clients.items():
+                    t0 = perf()
+                    get(url)
+                    samples[k].append((perf() - t0) * 1e3)
+                    time.sleep(0.02)
+        except Exception as exc:  # noqa: BLE001
+            rows["error"] = str(exc)[:200]
         finally:
-            c.close()
+            for _, close in clients.values():
+                try:
+                    close()
+                except Exception:  # noqa: BLE001
+                    pass
+        rows.update({k: stats(v) for k, v in samples.items()})
+        if samples.get("raw_socket_clob_time_ms"):
+            base = np.asarray(samples["raw_socket_clob_time_ms"])
+            for k, v in samples.items():
+                if k != "raw_socket_clob_time_ms" and len(v) == len(base):
+                    rows[f"{k}_minus_raw_paired"] = stats(np.asarray(v) - base)
         res["http_client_overhead"] = rows
     for k, v in res.items():
         if isinstance(v, dict) and "median" in v:

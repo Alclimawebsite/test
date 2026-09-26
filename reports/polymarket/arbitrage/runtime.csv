@@ -1,7 +1,7 @@
 etape,secondes
-1. chaîne K/F (event_meta + 4h gamma) et contrôles logiques,3.3
-"2. historique trades (21 jours, 2 processus)",112.2
-3a. Chainlink RTDS (niveaux V en temps réel),0.0
-"3b. carnet réel (12 fenêtres 15m, 2 processus)",191.6
-4. figures,1.7
-total,309.0
+1. chaîne K/F (event_meta + 4h gamma) et contrôles logiques,3.2
+"2. historique trades (21 jours, 2 processus)",96.8
+3a. Chainlink RTDS (niveaux V en temps réel),0.1
+"3b. carnet réel (13 fenêtres 15m, 2 processus)",138.0
+4. figures,1.4
+total,239.6

@@ -1,6 +1,6 @@
 # Arbitrages entre marchés liés : peut-on gagner à coup sûr, Up ou Down ?
 
-*Généré le 26/09/2026 11:18 UTC par `scripts/polymarket_arbitrage.py` (temps d'exécution total : 309 s, détail dans `runtime.csv`). Marchés BTC « Up or Down » 5 min, 15 min (et 4 h pour la chaîne). Historique : trades preneurs du 04/09 au 24/09/2026 ; carnet réel : enregistrement WebSocket du 26/09/2026.*
+*Généré le 26/09/2026 11:32 UTC par `scripts/polymarket_arbitrage.py` (temps d'exécution total : 240 s, détail dans `runtime.csv`). Marchés BTC « Up or Down » 5 min, 15 min (et 4 h pour la chaîne). Historique : trades preneurs du 04/09 au 24/09/2026 ; carnet réel : enregistrement WebSocket du 26/09/2026.*
 
 > Simulation papier, lecture seule de données publiques : aucun ordre, aucune clé. Depuis la France, Polymarket est en « close-only » : aucune de ces opérations n'y est possible. Il s'agit de répondre à une question, pas de trader.
 
@@ -9,10 +9,10 @@
 * **Prévoir Up ou Down à coup sûr est impossible.** Le meilleur signal trouvé ne dépasse pas ≈ 56 % de réussite à l'ouverture (`reports/polymarket/diagnostic.md`). La seule façon de gagner quel que soit le résultat est d'acheter, sur des marchés dont les issues sont liées, un ensemble de jetons qui paie au moins 1 $ dans tous les cas et coûte moins de 1 $, frais compris.
 * **Les marchés sont bien liés, et c'est vérifié.** La 15 min et ses trois 5 min forment une chaîne de niveaux Chainlink : 33 119 égalités exactes sur 33 119 paires comparées pour BTC (5m, 15m et 4h). Sur les issues officielles de 2 016 fenêtres 15m, on compte 0 violation des implications logiques (par exemple « trois 5m Up ⇒ 15m Up »). Deux 5m consécutives, elles, ne sont **pas** liées : les quatre combinaisons Up/Down arrivent chacune environ 25 % du temps.
 * **Une seule combinaison peut devenir gagnante à coup sûr.** Après la clôture de la 2e 5m, la 15m et la 3e 5m parient sur le **même prix final** avec deux seuils différents. Si le niveau V2 est au-dessus du niveau d'ouverture V0, « 5m#3 Up » entraîne « 15m Up » : acheter **15m Up + 5m#3 Down** paie alors toujours 1 $. Si V2 est en dessous, c'est **15m Down + 5m#3 Up**. Plus tôt dans la fenêtre, une couverture demande trois ou quatre jambes qui coûtent environ 1,5 à 2 $ : aucun cas trouvé.
-* **Historique (trades, 21 jours)** : une combinaison apparemment gagnante à coup sûr apparaît dans **115 fenêtres 15m sur 2 011** (5,7 %). Au-dessus de 1 c : 69 fenêtres ; au-dessus de 2 c : 45. Elle survient toujours après la clôture de #2 et dure en médiane 2 s. Profit total sur 21 jours, limité aux tailles réellement échangées : **42,93 $ à 10 parts, 85,86 $ à 50 parts, 102,10 $ à 100 parts**. En payant 1 c de plus par jambe, on tombe à 46,45 $ (100 parts). Mais la même méthode « voit » un Up + Down du même marché coûtant moins de 1 $ (impossible dans le carnet) pendant 14,1 % des secondes. Ces détections sont donc largement du bruit : les trades sont datés au bloc (≈ 2 s).
-* **Carnet réel à la milliseconde** (3,0 h de fenêtres dont les quatre carnets ont été enregistrés ensemble) : **2 violations**, durée de vie médiane **0,6 ms** (maximum 0,7 ms), 3 parts disponibles en médiane sur la jambe la plus mince. Profit garanti si l'on était servi instantanément : 0,07 $ au total. Avec **100 ms** de retard : 0,00 $ ; avec 300 ms : 0,00 $. **Rien n'est exécutable.**
+* **Historique (trades, 21 jours)** : une combinaison apparemment gagnante à coup sûr apparaît dans **115 fenêtres 15m sur 2 011** (5,7 %). Au-dessus de 1 c : 69 fenêtres ; au-dessus de 2 c : 45. Elle survient toujours après la clôture de #2 et dure en médiane 2 s. Profit total sur 21 jours, limité aux tailles réellement échangées : **42,93 $ à 10 parts, 85,86 $ à 50 parts, 102,10 $ à 100 parts**, avec 15 parts en médiane sur la jambe la plus mince. En payant 1 c de plus par jambe, on tombe à 46,45 $ (100 parts). Mais la même méthode « voit » un Up + Down du même marché coûtant moins de 1 $, ce qui est impossible dans le carnet, pendant 14,1 % des secondes (2,1 % frais compris). Ces détections sont donc largement du bruit : les trades sont datés au bloc (≈ 2 s).
+* **Carnet réel à la milliseconde** (13 fenêtres 15m, 3,3 h de carnets 5m et 15m enregistrés ensemble le 26/09) : **3 violations**, durée de vie médiane **0,7 ms** (maximum 75,1 ms), 5 parts disponibles en médiane sur la jambe la plus mince. Profit garanti si l'on était servi instantanément : 0,72 $ au total. Avec **100 ms** de retard : 0,00 $ ; avec 300 ms : 0,00 $. **Rien n'est exécutable.**
 * **Le seul « coup sûr » qui rapporte : l'issue déjà connue.** Le TWAP final ne dépend que des points Chainlink horodatés jusqu'à **2 à 3 s avant la clôture**. On le recalcule exactement depuis le flux RTDS (écart < 1e-6 $ quand aucun point ne manque), et il est connu environ **1,6 s avant la fin**. Sur 21 jours, des preneurs ont acheté le gagnant après la clôture avec une marge positive sur **125 marchés sur 8 043**, pour **45 030 $** au total. Sur les quasi-égalités (écart final < 0,1 pb), le gagnant restait à vendre sous 1 $ après la clôture dans 73 marchés sur 104 (24 891 $), parfois à quelques centimes. C'est une course de vitesse (délai médian ≈ 0 à 2 s après la clôture), réservée aux robots qui lisent Chainlink en direct.
-* **Exemple réel** (26/09 10:55:43.580 UTC, après clôture #2) : 15m Up + 5m#3 Down aux prix 0.250 / 0.710 ; coût frais compris 98,75 c pour un paiement garanti de 1 $, soit **1,25 c de gain sûr par lot**. Mais la jambe la plus mince ne portait que 5 part(s) (profit maximal 0,06 $) et la situation a disparu en **0,53 ms**.
+* **Exemple réel** (26/09 11:27:07.773 UTC, après clôture #2) : 15m Down + 5m#3 Up aux prix 0,660 / 0,270 ; coût frais compris 95,95 c pour un paiement garanti de 1 $, soit **4,05 c de gain sûr par lot**. Mais la jambe la plus mince ne portait que 16 part(s) (profit maximal 0,65 $) et la situation a disparu en **75,10 ms**.
 * **Verdict.** Oui, il existe des instants où une combinaison gagne à coup sûr. Mais entre marchés liés, ces instants sont rares, minuscules (quelques parts, quelques centimes) et durent moins d'une seconde : ils ne sont pas exécutables. Le vrai gain sûr, acheter le gagnant d'une quasi-égalité dans les 2 s qui entourent la clôture, suppose de recalculer le TWAP Chainlink en direct et de battre des robots déjà présents. Ce n'est pas une stratégie accessible depuis la France (close-only).
 
 ## 1. La chaîne de niveaux (vérification)
@@ -86,55 +86,56 @@ Les plus gros épisodes, variante robuste C (détail complet : `historique_episo
 
 | slug15 | t (s après S) | durée (s) | portefeuille | prix | âges (s) | tailles | marge | profit 100 parts ($) |
 |---|---|---|---|---|---|---|---|---|
-| `btc-updown-15m-1790042400` | 849 | 1 | 15m Up + 5m#3 Down | 0.680 / 0.186 | 1 / 0 | 82.0 / 100.0 | 10,8 % | 8,87 |
-| `btc-updown-15m-1788999300` | 874 | 8 | 15m Up + 5m#3 Down | 0.936 / 0.010 | 0 / 0 | 100.0 / 1061.9 | 4,9 % | 4,92 |
-| `btc-updown-15m-1788755400` | 603 | 3 | 15m Down + 5m#3 Up | 0.322 / 0.500 | 0 / 0 | 50.0 / 30.0 | 14,5 % | 4,36 |
-| `btc-updown-15m-1788999300` | 886 | 2 | 15m Up + 5m#3 Down | 0.947 / 0.010 | 0 / 0 | 2500.0 / 100.0 | 3,9 % | 3,88 |
-| `btc-updown-15m-1789544700` | 823 | 2 | 15m Down + 5m#3 Up | 0.920 / 0.040 | 0 / 0 | 35.0 / 35.0 | 3,2 % | 1,13 |
-| `btc-updown-15m-1789853400` | 855 | 2 | 15m Down + 5m#3 Up | 0.980 / 0.010 | 0 / 0 | 105.0 / 861.0 | 0,8 % | 0,79 |
-| `btc-updown-15m-1789654500` | 855 | 1 | 15m Up + 5m#3 Down | 0.980 / 0.010 | 0 / 0 | 105.0 / 3300.0 | 0,8 % | 0,79 |
-| `btc-updown-15m-1788678000` | 777 | 2 | 15m Down + 5m#3 Up | 0.980 / 0.010 | 0 / 0 | 308.0 / 323.0 | 0,8 % | 0,79 |
+| `btc-updown-15m-1790042400` | 849 | 1 | 15m Up + 5m#3 Down | 0,680 / 0,186 | 1 / 0 | 82,0 / 100,0 | 10,8 % | 8,87 |
+| `btc-updown-15m-1788999300` | 874 | 8 | 15m Up + 5m#3 Down | 0,936 / 0,010 | 0 / 0 | 100,0 / 1061,9 | 4,9 % | 4,92 |
+| `btc-updown-15m-1788755400` | 603 | 3 | 15m Down + 5m#3 Up | 0,322 / 0,500 | 0 / 0 | 50,0 / 30,0 | 14,5 % | 4,36 |
+| `btc-updown-15m-1788999300` | 886 | 2 | 15m Up + 5m#3 Down | 0,947 / 0,010 | 0 / 0 | 2500,0 / 100,0 | 3,9 % | 3,88 |
+| `btc-updown-15m-1789544700` | 823 | 2 | 15m Down + 5m#3 Up | 0,920 / 0,040 | 0 / 0 | 35,0 / 35,0 | 3,2 % | 1,13 |
+| `btc-updown-15m-1789853400` | 855 | 2 | 15m Down + 5m#3 Up | 0,980 / 0,010 | 0 / 0 | 105,0 / 861,0 | 0,8 % | 0,79 |
+| `btc-updown-15m-1789654500` | 855 | 1 | 15m Up + 5m#3 Down | 0,980 / 0,010 | 0 / 0 | 105,0 / 3300,0 | 0,8 % | 0,79 |
+| `btc-updown-15m-1788678000` | 777 | 2 | 15m Down + 5m#3 Up | 0,980 / 0,010 | 0 / 0 | 308,0 / 323,0 | 0,8 % | 0,79 |
 
-**Pourquoi c'est surtout du bruit.** Les trades sont datés au bloc (≈ 2 s) et l'ordre des trades dans un bloc est inconnu. Lors d'un mouvement brusque, le « dernier » achat d'un jeton peut précéder le mouvement et celui de l'autre le suivre. Exemple du 10/09 : dans le même bloc, la 5m#3 Down s'échange entre 0,51 et 0,91 et la 15m Up entre 0,27 et 0,50. L'estimateur fabrique alors des « arbitrages » impossibles. La preuve : il voit Up + Down < 1 $ sur un même marché pendant 14,1 % (A) ou 4,3 % (C) des secondes où les deux prix existent. Or le carnet réel ne le permet jamais (§ 5). Seul le carnet enregistré permet de dire si c'est exécutable.
+**Pourquoi c'est surtout du bruit.** Les trades sont datés au bloc (≈ 2 s) et l'ordre des trades dans un bloc est inconnu. Lors d'un mouvement brusque, le « dernier » achat d'un jeton peut précéder le mouvement et celui de l'autre le suivre. Exemple du 10/09 : dans le même bloc, la 5m#3 Down s'échange entre 0,51 et 0,91 et la 15m Up entre 0,27 et 0,50. L'estimateur fabrique alors des « arbitrages » impossibles. La preuve : il voit Up + Down < 1 $ sur un même marché pendant 14,1 % (A) ou 4,3 % (C) des secondes où les deux prix existent. Or le carnet réel ne le permet jamais (§ 6). Seul le carnet enregistré permet de dire si c'est exécutable.
 
 ## 4. Carnet réel à la milliseconde (26/09/2026)
 
-Enregistrement WebSocket CLOB des carnets BTC 5m **et** 15m en même temps (collecteur `scripts/polymarket_live_collector.py`, depuis 04:30 UTC, panne de 06:05 à 10:00). 12 fenêtres 15m terminées sont analysées, soit 3,0 h pendant lesquelles la marge est calculable. On reconstruit les quatre carnets dans le repère Up (carnet unifié : ask Down = 1 − bid Up) et on garde les trois meilleurs niveaux de chaque jeton après chaque message qui les modifie. Les horloges sont celles de réception locale. V0 à V3 viennent du flux **Chainlink RTDS** quand il est enregistré (depuis 10:29 UTC), sinon de gamma (`priceToBeat` des fenêtres suivantes). Un marché dont le carnet est croisé (bid ≥ ask, état intermédiaire entre deux messages) ou dont l'enregistrement est interrompu est ignoré pendant ce temps.
+Enregistrement WebSocket CLOB des carnets BTC 5m **et** 15m en même temps (collecteur `scripts/polymarket_live_collector.py`, depuis 04:30 UTC, panne de 06:05 à 10:00). 13 fenêtres 15m terminées sont analysées, soit 3,3 h pendant lesquelles la marge est calculable. On reconstruit les quatre carnets dans le repère Up (carnet unifié : ask Down = 1 − bid Up) et on garde les trois meilleurs niveaux de chaque jeton après chaque message qui les modifie. Les horloges sont celles de réception locale. V0 à V3 viennent du flux **Chainlink RTDS** quand il est enregistré (depuis 10:29 UTC), sinon de gamma (`priceToBeat` des fenêtres suivantes). Un marché dont le carnet est croisé (bid ≥ ask, état intermédiaire entre deux messages) ou dont l'enregistrement est interrompu est ignoré pendant ce temps.
 
-**Niveaux via Chainlink RTDS.** V(T) est reproduit **exactement** (écart < 1e-6 $) par la moyenne des 60 points `btc/usd` du flux RTDS qui finissent 3 s avant T (5 fois) ou 2 s avant T (1 fois). Sur 9 niveaux dont gamma donne la valeur officielle, 6 sont reproduits ; les autres ont un point manquant dans l'enregistrement (3 niveaux avec moins de 60 points). Sans décalage, l'écart atteint 1,03 $. Le dernier point utile arrive **1,58 s avant T** en médiane. Le niveau, donc l'issue d'une fenêtre qui se termine en T, est connu juste avant la clôture. Mais la fenêtre exacte (2 s ou 3 s) n'est pas connue d'avance, et les deux calculs diffèrent de 0,019 pb en médiane. Une quasi-égalité plus serrée que cela reste indécidable en temps réel, tout comme un point manquant. Détail : `chainlink_rtds_niveaux.csv`.
+**Niveaux via Chainlink RTDS.** V(T) est reproduit **exactement** (écart < 1e-6 $) par la moyenne des 60 points `btc/usd` du flux RTDS qui finissent 3 s avant T (7 fois) ou 2 s avant T (1 fois). Sur 12 niveaux dont gamma donne la valeur officielle, 8 sont reproduits ; les autres ont un point manquant dans l'enregistrement (4 niveaux avec moins de 60 points). Sans décalage, l'écart atteint 1,03 $. Le dernier point utile arrive **1,58 s avant T** en médiane. Le niveau, donc l'issue d'une fenêtre qui se termine en T, est connu juste avant la clôture. Mais la fenêtre exacte (2 s ou 3 s) n'est pas connue d'avance, et les deux calculs diffèrent de 0,013 pb en médiane. Une quasi-égalité plus serrée que cela reste indécidable en temps réel, tout comme un point manquant. Détail : `chainlink_rtds_niveaux.csv`.
 
-**2 violations** au meilleur ask, frais compris, toutes inter-marchés (les carnets croisés sont exclus) :
+**3 violations** au meilleur ask, frais compris, toutes inter-marchés (les carnets croisés sont exclus) :
 
 | slug15 | phase | t (s après S) | durée de vie (ms) | portefeuille | asks | tailles | marge | profit max ($) | source des V |
 |---|---|---|---|---|---|---|---|---|---|
-| `btc-updown-15m-1790419500` | après clôture #2 | 643,578 | 0,74 | 15m Up + 5m#3 Down | 0.250 / 0.710 | 1.0 / 8.0 | 1,25 % | 0,012 | rtds,rtds,rtds |
-| `btc-updown-15m-1790419500` | après clôture #2 | 643,580 | 0,53 | 15m Up + 5m#3 Down | 0.250 / 0.710 | 5.0 / 21.0 | 1,25 % | 0,062 | rtds,rtds,rtds |
+| `btc-updown-15m-1790419500` | après clôture #2 | 643,578 | 0,74 | 15m Up + 5m#3 Down | 0,250 / 0,710 | 1,0 / 8,0 | 1,25 % | 0,012 | rtds, rtds, rtds |
+| `btc-updown-15m-1790419500` | après clôture #2 | 643,580 | 0,53 | 15m Up + 5m#3 Down | 0,250 / 0,710 | 5,0 / 21,0 | 1,25 % | 0,062 | rtds, rtds, rtds |
+| `btc-updown-15m-1790421300` | après clôture #2 | 727,773 | 75,10 | 15m Down + 5m#3 Up | 0,660 / 0,270 | 16,0 / 26,8 | 4,05 % | 0,648 | gamma, rtds, rtds |
 
 ![durée de vie](carnet_duree_de_vie.png)
 
-*Carnet réel : 2 violations en 3,0 h, durée de vie médiane 0,63 ms (max 0,74 ms) et 3 parts sur la jambe la plus mince : trop bref et trop petit pour être saisi*
+*Carnet réel : 3 violations en 3,3 h, durée de vie médiane 0,74 ms (max 75 ms) et 5 parts sur la jambe la plus mince : trop bref et trop petit pour être saisi*
 
 **Exécution avec retard.** À la détection, on planifie un lot de 100 parts au meilleur prix, sur trois niveaux au plus. Les ordres arrivent 0, 100, 300, 1 000 ou 3 000 ms plus tard et ne sont remplis qu'aux prix inférieurs ou égaux au prix limite détecté. Chaque jambe est confrontée au carnet à l'instant d'arrivée, et la jambe la plus pauvre fixe la part du lot couverte. Les parts achetées en trop sur une jambe restent « orphelines » : non couvertes, donc non comptées.
 
 | retard (ms) | violations | profit garanti total ($) | lots complets | part moyenne du lot | violations encore rentables | parts orphelines |
 |---|---|---|---|---|---|---|
-| 0 | 2 | 0,075 | 100 % | 1,00 | 2 | 0,0 |
-| 100 | 2 | 0,000 | 0 % | 0,00 | 0 | 6,0 |
-| 300 | 2 | 0,000 | 0 % | 0,00 | 0 | 6,0 |
-| 1 000 | 2 | 0,000 | 0 % | 0,00 | 0 | 6,0 |
-| 3 000 | 2 | 0,000 | 0 % | 0,00 | 0 | 6,0 |
+| 0 | 3 | 0,723 | 100 % | 1,00 | 3 | 0,0 |
+| 100 | 3 | 0,000 | 0 % | 0,00 | 0 | 22,0 |
+| 300 | 3 | 0,000 | 0 % | 0,00 | 0 | 22,0 |
+| 1 000 | 3 | 0,000 | 0 % | 0,00 | 0 | 6,0 |
+| 3 000 | 3 | 0,000 | 0 % | 0,00 | 0 | 6,0 |
 
 ![profit selon la latence](carnet_profit_selon_latence.png)
 
-*Avec 100 ms de retard ou plus, le profit garanti tombe de 0,075 $ à 0,000 $ : les violations se referment avant qu'un ordre puisse arriver*
+*Avec 100 ms de retard ou plus, le profit garanti tombe de 0,723 $ à 0,000 $ : les violations se referment avant qu'un ordre puisse arriver*
 
 ![exemple](carnet_exemple.png)
 
-*Exemple réel : 15m Up + 5m#3 Down coûte 98,8 c pour un paiement garanti de 1 $ pendant 1 ms (26/09 10:55:43 UTC)*
+*Exemple réel : 15m Down + 5m#3 Up coûte 95,95 c pour un paiement garanti de 1 $ pendant 75,10 ms seulement (26/09 11:27:07 UTC)*
 
 ![distribution de la marge](distribution_marge.png)
 
-*Après la clôture de la 2e 5m, la couverture 15m + 5m#3 du carnet réel n'a été gagnante que 1,3 ms sur 0,7 h ; l'estimation par les trades le suggère 0,23 % du temps (variante A)*
+*Après la clôture de la 2e 5m, la couverture 15m + 5m#3 du carnet réel n'a été gagnante que 76,4 ms sur 0,8 h ; l'estimation par les trades le suggère 0,23 % du temps (variante A)*
 
 ## 5. Issue déjà connue : acheter le gagnant autour de la clôture
 
@@ -155,7 +156,7 @@ Plus gros cas (`historique_gagnant_apres_cloture.csv`) : `btc-updown-5m-17902386
 
 Quand l'écart final est minuscule, le marché, qui raisonne sur le prix spot, ne sait pas qui a gagné au moment de la clôture. Celui qui recalcule le TWAP Chainlink sait. Certains cas avec un délai de plusieurs minutes (jusqu'à 40 min) portent en plus un risque de résolution : le marché hésitait encore. Les montants sont concentrés sur quelques fenêtres.
 
-Carnet réel : sur 45 marchés, le gagnant était encore à vendre avec une marge positive après l'instant où l'issue est connue (RTDS, ou E − 1,7 s à défaut) dans **0** cas. Quasi-égalités (|écart| < 0,5 pb) :
+Carnet réel : sur 49 marchés, le gagnant était encore à vendre avec une marge positive après l'instant où l'issue est connue (RTDS, ou E − 1,7 s à défaut) dans **0** cas. Quasi-égalités (|écart| < 0,5 pb) :
 
 | slug | gagnant | écart (pb) | connu avant E (s) | ask gagnant E−10 s | marge E−10 s | ask E−3 s | ask quand connu | ask à E | marge max après connu | profit max ($) |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -167,12 +168,13 @@ Carnet réel : sur 45 marchés, le gagnant était encore à vendre avec une marg
 | `btc-updown-15m-1790418600` | Up | +0,278 | 1,74 | — | — | — | — | — | — | 0,00 |
 | `btc-updown-5m-1790418900` | Down | −0,176 | — | — | — | — | — | — | — | 0,00 |
 | `btc-updown-5m-1790419800` | Down | −0,224 | 1,35 | — | — | — | — | — | — | 0,00 |
+| `btc-updown-15m-1790420400` | Up | +0,464 | — | — | — | — | — | — | — | 0,00 |
 
 *— = aucun ask du gagnant (personne ne le vend) ou marché plus enregistré. À E−10 s, le TWAP n'est pas encore figé : acheter alors n'est pas un coup sûr.*
 
 ## 6. Autres relations testées
 
-* **Up + Down du même marché** : dans le carnet unifié, ask Up + ask Down = 1 + écart ≥ 1 $. Vérifié sur le carnet reconstruit : médiane (pondérée par la durée) 1,010 $. Seuls 1 944 états sur 3 889 864 (0,050 %) passent sous 1 $, pour 4,4 s au total. Ce sont tous des carnets croisés, donc des états intermédiaires de la reconstruction : messages entre deux mises à jour, ou niveaux hors de la bande de ± 0,10 que le collecteur ne suit pas. Le moteur d'appariement ne peut pas être croisé. Détail : `carnet_up_plus_down.csv`.
+* **Up + Down du même marché** : dans le carnet unifié, ask Up + ask Down = 1 + écart ≥ 1 $. Vérifié sur le carnet reconstruit : médiane sur les états 1,010 $. Seuls 2 007 états sur 4 226 822 (0,047 %) passent sous 1 $, pour 4,5 s au total. Ce sont tous des carnets croisés, donc des états intermédiaires de la reconstruction : messages entre deux mises à jour, ou niveaux hors de la bande de ± 0,10 que le collecteur ne suit pas. Le moteur d'appariement ne peut pas être croisé. Détail : `carnet_up_plus_down.csv`.
 * Dans les trades historiques, la même relation paraît violée pendant 14,1 % des secondes (variante A). Frais compris, c'est 2,07 %. C'est la mesure du bruit de l'estimation par les trades (`historique_up_plus_down.csv`).
 * **5m consécutives** : aucune contrainte logique (§ 1), donc aucun arbitrage possible.
 * **4h** : la chaîne est vérifiée (K et F de la 4h égaux à ceux de ses 15m de début et de fin, 100 %). La 4h ne se branche sur une 15m que pendant la **dernière 15m** de sa fenêtre (6 fois par jour). Après la clôture de #2, 4h, 15m et 5m#3 sont alors trois paris sur V3 avec trois seuils, et leurs prix doivent être rangés dans l'ordre des seuils. Le programme linéaire gère ce cas (test `test_4h_ladder_arbitrage`), mais ni trades 4h ni carnet 4h ne sont enregistrés : non mesuré ici.
@@ -180,7 +182,7 @@ Carnet réel : sur 45 marchés, le gagnant était encore à vendre avec une marg
 ## 7. Limites
 
 * **Historique = détection.** Prix estimés par des trades datés au bloc, sans carnet. Une « opportunité » historique n'est pas une preuve d'exécution. Les tailles utilisées sont celles réellement échangées, pas la profondeur disponible.
-* **Carnet réel = court échantillon** (3,0 h, une seule journée, avec une panne de 06:05 à 10:00). Les `price_change` sont filtrés à ± 0,10 du milieu par le collecteur. Lors d'un saut de plus de 10 c, des niveaux éloignés peuvent rester périmés jusqu'à l'instantané suivant. Ces états sont presque toujours croisés, donc exclus, mais une violation fantôme de quelques ms ne peut pas être totalement écartée. Cela renforce la conclusion : rien d'exploitable.
+* **Carnet réel = court échantillon** (3,3 h, une seule journée, avec une panne de 06:05 à 10:00). Les `price_change` sont filtrés à ± 0,10 du milieu par le collecteur. Lors d'un saut de plus de 10 c, des niveaux éloignés peuvent rester périmés jusqu'à l'instantané suivant. Ces états sont presque toujours croisés, donc exclus, mais une violation fantôme de quelques ms ne peut pas être totalement écartée. Cela renforce la conclusion : rien d'exploitable.
 * Retard mesuré sur l'horloge de réception locale. Un ordre réel ajoute l'aller vers le serveur, la mise en file et le bloc de règlement. Les résultats avec retard sont donc optimistes.
 * Frais : barème `crypto_fees_v2` (0,07·p·(1−p) par part, preneur), sans arrondi. Le gain du gagnant connu suppose une résolution conforme à la règle (vérifiée à 100 % sur 8 064 marchés) et un flux RTDS complet.
 * 4h non mesurée (pas de données de prix). ETH/SOL : seule la chaîne est vérifiée.
@@ -209,11 +211,11 @@ Carnet réel : sur 45 marchés, le gagnant était encore à vendre avec une marg
 
 | etape | secondes |
 |---|---|
-| 1. chaîne K/F (event_meta + 4h gamma) et contrôles logiques | 3,3 |
-| 2. historique trades (21 jours, 2 processus) | 112,2 |
-| 3a. Chainlink RTDS (niveaux V en temps réel) | 0,0 |
-| 3b. carnet réel (12 fenêtres 15m, 2 processus) | 191,6 |
-| 4. figures | 1,7 |
-| total | 309,0 |
+| 1. chaîne K/F (event_meta + 4h gamma) et contrôles logiques | 3,2 |
+| 2. historique trades (21 jours, 2 processus) | 96,8 |
+| 3a. Chainlink RTDS (niveaux V en temps réel) | 0,1 |
+| 3b. carnet réel (13 fenêtres 15m, 2 processus) | 138,0 |
+| 4. figures | 1,4 |
+| total | 239,6 |
 
 Relancer : `. .venv/bin/activate && python scripts/polymarket_arbitrage.py` (≈ 2 min d'historique avec 2 processus, puis ≈ 20 s par fenêtre 15m de carnet). Le collecteur peut tourner en parallèle.

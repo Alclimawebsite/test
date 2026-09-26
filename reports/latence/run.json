@@ -1,0 +1,51 @@
+{
+  "genere": "2026-09-26T11:28:35.601006+00:00",
+  "since": 1790418592.7233098,
+  "until": 1790422073.5715742,
+  "bn_start": 1790418592.7233098,
+  "bn_end": 1790422072.660075,
+  "n_markets": 22,
+  "hours": 0.8583333333333333,
+  "hours_resolved": 0.8583333333333333,
+  "lag_ms": 700.0,
+  "extra_sd_pb": 0.4,
+  "extra_sd_source": "valeur du rapport historique : moins de 10 marchés BTC avec Chainlink complet ici (6)",
+  "sigma_factor": 1.4,
+  "sigma_warm_start": {
+    "btc": true,
+    "eth": true
+  },
+  "clock": {
+    "rtt_ms": 186.371639,
+    "offset_ms": 128.146728515625,
+    "uncertainty_ms": 93.1858195
+  },
+  "rtt_clob_ms": 131.124414,
+  "runtime_s": 42.02956295013428,
+  "jobs": 2,
+  "boot": 2000,
+  "markets": [
+    "btc-updown-15m-1790419500",
+    "btc-updown-15m-1790420400",
+    "btc-updown-5m-1790418900",
+    "btc-updown-5m-1790419200",
+    "btc-updown-5m-1790419500",
+    "btc-updown-5m-1790419800",
+    "btc-updown-5m-1790420100",
+    "btc-updown-5m-1790420400",
+    "btc-updown-5m-1790420700",
+    "btc-updown-5m-1790421000",
+    "btc-updown-5m-1790421300",
+    "btc-updown-5m-1790421600",
+    "eth-updown-5m-1790418900",
+    "eth-updown-5m-1790419200",
+    "eth-updown-5m-1790419500",
+    "eth-updown-5m-1790419800",
+    "eth-updown-5m-1790420100",
+    "eth-updown-5m-1790420400",
+    "eth-updown-5m-1790420700",
+    "eth-updown-5m-1790421000",
+    "eth-updown-5m-1790421300",
+    "eth-updown-5m-1790421600"
+  ]
+}

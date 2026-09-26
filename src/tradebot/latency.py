@@ -32,8 +32,8 @@ Chaîne de calcul (tout en secondes flottantes sur l'horloge locale, sauf mentio
    meilleur prix, 50 % et 90 % du saut parcourus par le milieu, placebo).
 5. :func:`find_opportunities` : prix périmés (P − coût preneur > marge), durée de vie de chaque
    niveau jusqu'à son retrait, origine (saut Binance / désaccord persistant / nouvel ask) ;
-   :func:`removal_cause` : retiré par un preneur ou annulé ; :func:`simulate_fills` : exécution à
-   t + ℓ ; :func:`pnl_curve`, :func:`bootstrap_by_group`, :func:`breakeven_latency` (option
+   :func:`removal_cause` : retiré par un preneur ou annulé ; :func:`cooldown_mask` : un ordre par
+   marché × côté et par seconde ; :func:`simulate_fills` : exécution à t + ℓ ; :func:`pnl_curve`, :func:`bootstrap_by_group`, :func:`breakeven_latency` (option
    isotone), :func:`last_significant_latency` : P&L selon ℓ, latence critique ℓ* et gain démontré.
 6. :func:`lag_scan` : retard de Chainlink sur Binance (corrélation des rendements selon le décalage).
 
@@ -63,7 +63,8 @@ __all__ = [
     "cex_files", "load_binance", "load_coinbase", "load_rtds",
     "PriceSeries", "asof_index", "asof_values", "seconds_asof", "twap_1s", "ewma_var_1s", "SigmaSeries",
     "TwapFormula", "BookTimeline", "book_timeline", "trades_up_frame", "ladders_at",
-    "taker_cost", "side_prices", "reaction_events", "find_opportunities", "removal_cause", "simulate_fills",
+    "taker_cost", "side_prices", "reaction_events", "find_opportunities", "removal_cause", "cooldown_mask",
+    "simulate_fills",
     "pnl_curve", "bootstrap_by_group", "breakeven_latency", "isotonic_decreasing", "last_significant_latency",
     "lag_scan", "summarize_latency",
 ]
@@ -681,15 +682,21 @@ def find_opportunities(T: np.ndarray, P: np.ndarray, ask_up: np.ndarray, size_up
 
 def removal_cause(opps: pd.DataFrame, trades: pd.DataFrame, slack_s: float = 0.25) -> pd.DataFrame:
     """Qui a retiré le niveau : ``preneur`` (un trade l'a consommé entre le début et la fin + ``slack_s``)
-    ou ``retrait`` (annulé par le teneur). Ajoute ``removed_by`` et ``taken_size`` (parts échangées)."""
+    ou ``retrait`` (annulé par le teneur). Ajoute ``removed_by``, ``taken_size`` (parts échangées) et
+    ``first_take_rx`` / ``first_take_ts`` (réception locale et horodatage serveur du premier trade sur ce
+    niveau, s ; NaN sans trade) : avec le délai preneur, un trade apparié peu après la détection vient d'un
+    ordre parti **avant** le mouvement, pas d'un preneur plus rapide."""
     out = opps.copy()
-    by, taken = [], []
-    tr = trades if trades is not None and len(trades) else pd.DataFrame(columns=["rx", "consumes", "level_up", "size"])
+    by, taken, f_rx, f_ts = [], [], [], []
+    tr = trades if trades is not None and len(trades) else pd.DataFrame(columns=["rx", "ts", "consumes", "level_up",
+                                                                                   "size"])
     trx = tr["rx"].to_numpy(dtype="float64") if len(tr) else np.array([])
     for r in out.itertuples(index=False):
         if r.censored:
             by.append("non observé")
             taken.append(math.nan)
+            f_rx.append(math.nan)
+            f_ts.append(math.nan)
             continue
         i0, i1 = np.searchsorted(trx, [r.t_start, r.t_end_book + slack_s])
         sub = tr.iloc[i0:i1]
@@ -700,9 +707,33 @@ def removal_cause(opps: pd.DataFrame, trades: pd.DataFrame, slack_s: float = 0.2
         s = float(sub.loc[m, "size"].sum()) if len(sub) else 0.0
         by.append("preneur" if s > 0 else "retrait")
         taken.append(s)
+        first = sub.loc[m].iloc[0] if s > 0 else None
+        f_rx.append(float(first["rx"]) if first is not None else math.nan)
+        f_ts.append(float(first["ts"]) if first is not None and "ts" in sub else math.nan)
     out["removed_by"] = by
     out["taken_size"] = taken
+    out["first_take_rx"] = f_rx
+    out["first_take_ts"] = f_ts
     return out
+
+
+def cooldown_mask(t: Sequence[float], keys: Sequence, cooldown_s: float = 1.0) -> np.ndarray:
+    """Un ordre par clé (p. ex. marché × côté) et par ``cooldown_s`` : ``True`` pour les instants retenus.
+
+    Un saut de Binance fait souvent apparaître plusieurs niveaux périmés en quelques ms (le teneur retire ses
+    prix un à un) ; un robot n'envoie qu'**un** ordre, et la simulation ne retire pas du carnet les parts
+    qu'il a déjà prises : sans ce filtre, les mêmes parts seraient achetées plusieurs fois. Un instant est
+    retenu s'il suit d'au moins ``cooldown_s`` le dernier instant **retenu** de la même clé."""
+    t = np.asarray(t, dtype="float64")
+    keys = np.asarray(keys, dtype=object)
+    keep = np.zeros(t.size, dtype=bool)
+    last: dict = {}
+    for i in np.argsort(t, kind="stable"):
+        k = keys[i]
+        if t[i] >= last.get(k, -math.inf) + cooldown_s - _EPS:
+            keep[i] = True
+            last[k] = t[i]
+    return keep
 
 
 # ---------------------------------------------------------------------------

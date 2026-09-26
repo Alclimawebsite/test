@@ -368,6 +368,16 @@ def test_removal_cause():
     r = lt.removal_cause(opps, trades)
     assert r["removed_by"].tolist() == ["preneur", "retrait"]
     assert r["taken_size"].iloc[0] == 30.0
+    assert r["first_take_rx"].iloc[0] == 2.3 and r["first_take_ts"].iloc[0] == 2.3
+    assert math.isnan(r["first_take_rx"].iloc[1])
+
+
+def test_cooldown_mask_one_order_per_key_and_second():
+    # trois niveaux du même saut en 60 ms (un seul ordre), un autre côté, puis un nouveau saut 1,5 s plus tard
+    t = [10.00, 10.02, 10.06, 10.03, 11.50, 11.9, 12.6]
+    keys = ["m/up", "m/up", "m/up", "m/down", "m/up", "m/up", "m/up"]
+    np.testing.assert_array_equal(lt.cooldown_mask(t, keys, 1.0), [True, False, False, True, True, False, True])
+    assert lt.cooldown_mask(t, keys, 0.0).all()
 
 
 def test_pnl_curve_bootstrap_breakeven():

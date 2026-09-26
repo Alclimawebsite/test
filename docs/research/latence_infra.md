@@ -25,62 +25,77 @@ sont fiables, les queues de distribution (p90, p99) sont gonflées.*
 ## 0. Réponse courte
 
 **Le temps de réaction à battre (ℓ\*).** Quand Binance bouge, le carnet Polymarket se remet à
-jour en un quart de seconde. Les délais ci-dessous sont comptés en heure des serveurs, du trade
+jour en quelques centaines de ms. Les délais ci-dessous sont comptés en heure des serveurs, du trade
 Binance jusqu'au message du CLOB :
 
 | Part du mouvement déjà intégrée par le carnet | 11 % | 25 % | 50 % | 75 % | ≈ 100 % |
 |---|---|---|---|---|---|
 | Délai après le trade Binance **[mesuré]** (BTC 5m et 15m, 14 marchés) | 100 ms | 150 ms | 225–250 ms | 300 ms | 400 ms |
 
-Trois autres mesures confirment cet ordre de grandeur :
+Les deux autres workflows et la littérature concordent :
 
-- l'autre workflow (`reports/polymarket/formule/`) trouve une médiane de 240 ms, avec des
-  quartiles de 120 et 360 ms ;
-- OpenMarket rapporte 347 ms **[publié]** ;
-- surtout, le gain d'un preneur qui suit les sauts de la formule, mesuré sur le carnet réel
-  (même rapport, § 5), vaut +7,7 c par part à 0 ms, +6,5 c à 100 ms, +4,3 c à 200 ms, +1,4 c
-  (non significatif) à 300 ms, puis devient négatif à 500 ms.
+- **`reports/latence/`** (même journée) :
+  - un prix périmé après un saut de Binance reste en médiane **92 ms** dans le carnet ;
+  - 41 % sont pris par un preneur plus rapide, le reste est annulé par le teneur de marché ;
+  - la moitié de l'avantage est perdue à **ℓ½ ≈ 209 ms** en temps réel (182 ms vu d'ici) ;
+  - le gain n'est démontré que jusqu'à **≈ 127 ms** en temps réel (100 ms vu d'ici) ;
+  - le point mort n'est pas encore identifié (IC 124 ms – 4,4 s).
+- **`reports/polymarket/formule/`** : le carnet fait la moitié du chemin en 240 ms (quartiles 120
+  et 360 ms). Un preneur qui suit les sauts de la formule, en passant premier, gagne +7,7 c par part
+  à 0 ms, +6,5 c à 100 ms, +4,3 c à 200 ms, +1,4 c (non significatif) à 300 ms, puis perd à 500 ms.
+- **OpenMarket** : 347 ms **[publié]**.
 
-**ℓ\* ≈ 200 à 300 ms** : c'est le délai entre le trade Binance et l'appariement de notre ordre au
-CLOB. Pour garder l'essentiel de l'avantage, il faut viser **≤ 100–150 ms**. Et cela ne suffit pas :
-il faut aussi arriver **avant les autres preneurs rapides**, qui vident le meilleur ask (≈ 67 parts
-en médiane). Le dossier `reports/latence/` n'existait pas au moment de la rédaction.
+**ℓ\* se situe entre ≈ 130 ms et ≈ 200 ms**, comptés du trade Binance à l'appariement de notre
+ordre. Jusqu'à ≈ 130 ms, le gain est démontré (`reports/latence/`) ; il reste significatif jusqu'à
+≈ 200 ms (rapport sur la formule) ; au-delà de ≈ 210 ms, la moitié de l'avantage est perdue.
+Et cela ne suffit pas : il faut aussi arriver **avant les autres preneurs rapides**, qui vident le
+meilleur ask (≈ 20 à 67 parts en médiane selon les rapports).
 
 **Ce qui ne se compresse pas :**
 
 - **La distance Tokyo (Binance) → Londres (CLOB).** Aller simple : ≥ 47 ms en théorie (fibre en
   ligne droite, qui n'existe pas), ≈ 70 ms sur le meilleur réseau privé publié, ≈ 105 ms sur le
   réseau d'AWS.
-- **Le délai preneur imposé par le CLOB sur ces marchés** (`itode: true`, vérifié sur le marché
-  BTC 5 min **[mesuré]**) : 50 ms depuis le 17/08/2026 selon l'annonce, 250 ms selon la
-  documentation.
+- **Le délai preneur imposé par le CLOB sur les marchés crypto : 150 ms depuis le 04/09/2026 à
+  14:00 UTC** (journal des changements de Polymarket). Il valait 50 ms entre le 17/08 et le 04/09,
+  250 ms auparavant. Le drapeau `itode: true` est vérifié sur le marché BTC 5 min **[mesuré]**.
 
-Le plancher réaliste est donc d'environ **120 ms**.
+Le plancher réaliste d'un preneur est donc de **≈ 225 ms** (70 + 150 + quelques ms), au-dessus de
+ℓ½. Le plancher physique est de ≈ 200 ms.
 
 | Architecture | Trade Binance → ordre apparié : médiane / p90 | Part du repricing déjà faite à l'arrivée | Gain de la formule à ce délai *si l'on passe premier* | Coût mensuel | Complexité |
 |---|---|---|---|---|---|
-| **A.** Ce conteneur, Python actuel (hypothétique : l'ordre est refusé, 403) | **216 / 235 ms** (416 / 435 ms avec un délai preneur de 250 ms) | ≈ 46 % | ≈ +3,8 c (≈ +0,4 c avec 250 ms) | 0 | faible |
-| **B.** Serveur dédié dans la région du CLOB (AWS eu-west-2), code asynchrone, ordres pré-signés, connexions chaudes | **≈ 170 / 180 ms** **[estimé]** | ≈ 31 % | ≈ +5,0 c | ≈ 100–200 $ | moyenne |
-| **C.** Le mieux possible : nœud à Tokyo + réseau privé à faible latence + nœud à Londres, Chainlink Data Streams | **≈ 130 / 140 ms** **[estimé]** | ≈ 20 % | ≈ +5,8 c | ≈ 1 000–1 200 $ + réseau privé sur devis | élevée |
-| Plancher physique (fibre en ligne droite + 50 ms) | ≈ 100 ms | ≈ 11 % | ≈ +6,5 c | — | — |
+| **A.** Ce conteneur, Python actuel (hypothétique : l'ordre est refusé, 403) | **316 / 335 ms** | ≈ 81 % | ≈ +1,3 c (non significatif) | 0 | faible |
+| **B.** Serveur dédié dans la région du CLOB (AWS eu-west-2), code asynchrone, ordres pré-signés, connexions chaudes | **≈ 265–270 / 280 ms** **[estimé]** | ≈ 66 % | ≈ +2,3 c | ≈ 100–200 $ | moyenne |
+| **C.** Le mieux possible : nœud à Tokyo + réseau privé à faible latence + nœud à Londres, Chainlink Data Streams | **≈ 228–232 / 240 ms** **[estimé]** | ≈ 52 % | ≈ +3,4 c | ≈ 1 000–1 300 $ + réseau privé sur devis | élevée |
+| Plancher physique (fibre en ligne droite + 150 ms) | ≈ 200 ms | ≈ 40 % | ≈ +4,3 c | — | — |
 
 La colonne « gain » est la borne haute du rapport sur la formule, **en supposant qu'on passe avant
-tous les autres preneurs**. En pratique, le premier arrivé prend la liquidité périmée :
+tous les autres preneurs**. `reports/latence/`, plus prudent, ne démontre rien au-delà de 127 ms.
 
-- **A** arrive après les preneurs de classe B et C. Elle est inutile, et de toute façon refusée
-  (403).
-- **B** bat la médiane des teneurs de marché, pas les plus rapides ni les preneurs de classe C.
-- **C** atteint à peu près le premier quartile. On n'y fait que **rejoindre** les meilleurs, pour
-  quelques cents par part sur quelques dizaines de parts, frais preneur déduits (jusqu'à 1,75 c
-  par part à 0,50).
+**En preneur, aucune architecture n'atteint ℓ\*.** Le délai de 150 ms suffit à mettre tout
+preneur au-delà de la zone de gain démontré, même C, même au plancher physique.
+
+- A arrive quand 80 % du repricing est fait : inutile, et de toute façon refusée (403).
+- B arrive après la médiane des teneurs de marché.
+- C arrive à peu près à la médiane, pour quelques cents par part au mieux, frais preneur déduits
+  (jusqu'à 1,75 c par part à 0,50), en concurrence avec les autres preneurs de même classe.
+
+La conclusion rejoint celle de `reports/latence/` : « impossible en preneur ».
 
 **Le levier qui reste n'est pas la prise mais l'annulation.** Le délai preneur retient chaque
-ordre preneur 50 ms (non annulable) avant de le confronter au carnet. Un teneur de marché en B voit
-Binance ≈ 110 ms après le trade et fait annuler ses ordres vers ≈ 116 ms. Un preneur de classe C,
-arrivé à ≈ 78 ms, ne peut pas être apparié avant ≈ 128 ms. Pour nous, **la vitesse utile serait
-celle d'un maker qui se protège, pas celle d'un preneur qui chasse** (§ 4.2). Cela ne dit rien de
-la rentabilité : le maker simulé sur le carnet réel n'a rien montré de significatif
-(`reports/polymarket/maker_live/`).
+ordre preneur **150 ms, non annulable**, avant de le confronter au carnet.
+
+- Un teneur de marché en B voit Binance ≈ 110 ms après le trade et fait annuler ses ordres vers
+  **≈ 116 ms**.
+- Le preneur le plus rapide (classe C), arrivé à ≈ 78 ms, ne peut pas être apparié avant
+  **≈ 228 ms**.
+- Même depuis ce conteneur (A), une annulation arrive vers ≈ 165 ms, avant tout preneur.
+
+Pour nous, **la vitesse utile est celle d'un maker qui se protège, pas celle d'un preneur qui
+chasse** (§ 4.2). Cela ne dit rien de la rentabilité : le maker simulé sur le carnet réel n'a rien
+montré de significatif (`reports/polymarket/maker_live/`). La sélection adverse qui reste vient
+sans doute surtout de flux informés qui ne dépendent pas de la latence (hypothèse).
 
 ---
 
@@ -98,7 +113,7 @@ hôte et par chemin, 100 requêtes par point d'accès sur connexion chaude (50 p
 | IP publique vue de l'extérieur | 34.172.54.233 (et d'autres 34.x) | 160.79.106.x |
 | Réseau | AS396982 Google LLC, **plages Google Cloud `us-central1`** (Council Bluffs, Iowa) | AS396982, hors des plages Google Cloud publiées ; géolocalisée à Chicago ou Columbus |
 | Frontal Cloudflare atteint | **ORD** (Chicago) | **IAD** (Ashburn, Virginie) |
-| Certificat TLS reçu | émis par « Anthropic Egress Gateway » : TLS réinterprété par une passerelle transparente | certificat réel de la cible (Google Trust Services pour Polymarket) |
+| Certificat TLS reçu | émis par « Anthropic Egress Gateway » : TLS déchiffré puis rechiffré par une passerelle transparente | certificat réel de la cible (Google Trust Services pour Polymarket) |
 | Qui l'emprunte | tests uniquement | **les deux collecteurs** (la bibliothèque `websockets` lit `HTTPS_PROXY`) |
 
 Machine : 4 vCPU Intel Xeon à 2,8 GHz, Python 3.11. Les métadonnées Google Cloud ne sont pas
@@ -154,9 +169,9 @@ Lecture :
 - **À froid, c'est 3 à 4 fois plus lent.** Par le proxy : CONNECT 224 ms + TLS 65 ms + premier
   octet 136 ms = 441 ms (p90 564). En direct : 164 ms pour le CLOB, 611 ms pour Binance. Règle :
   **ne jamais ouvrir de connexion sur le chemin critique.**
-- **Le client HTTP coûte peu.** `httpx` en HTTP/2 (le client de `py-clob-client-v2`) donne
-  141,6 ms sur `/time`, contre 133,7 ms pour un socket brut sur le même chemin (séries
-  successives, n = 40) : quelques ms de surcoût ou de variance.
+- **Le client HTTP coûte peu.** `httpx` en HTTP/2 (le client de `py-clob-client-v2`) ajoute
+  **2,2 ms** en médiane par rapport à un socket brut : 135,8 ms contre 133,5 ms sur `/time`,
+  requêtes entrelacées et comparées deux à deux, n = 60.
 - Pour Coinbase, l'écart entre frontal et origine (26 ms depuis ORD, 51 ms depuis IAD) ne colle
   pas avec une origine « à côté » d'IAD. La doc de Coinbase indique pourtant us-east-1. Ce
   calcul mêle donc routage interne de Cloudflare et traitement : il sert d'ordre de grandeur, pas
@@ -215,33 +230,35 @@ Latence = réception locale corrigée (+101,7 ms) − horodatage de la source. D
 
   | Paire | Pas | Résultat **[mesuré]** |
   |---|---|---|
-  | Binance → Chainlink (heure d'observation) | 1 s | Binance mène d'environ **2 s** (corrélation 0,52 à +2 s, 0,46 à +1 s, 0,10 à 0) |
+  | Binance → Chainlink (heure d'observation) | 1 s | Binance mène de **1 à 2 s** (corrélation 0,52 à +2 s, 0,46 à +1 s, 0,10 à 0) |
   | Binance → Coinbase | 50 ms | Binance mène de **50 à 100 ms** (0,23 à +50 ms, 0,12 à +100 ms, 0,05 à 0, ≤ 0,02 si Coinbase menait) |
 
-  Par RTDS, un mouvement de Binance devient donc visible dans Chainlink **≈ 3,4 s** plus tard.
-  Le diagnostic du 25/09 estimait « ≈ 4 s ».
+  Le retard de Chainlink dépend de la méthode : ≈ 0,6 s en heure des serveurs pour
+  `reports/latence/`, 1 à 2 s ici (corrélation des rendements 1 s), ≈ 4 s dans le diagnostic du
+  25/09 (alignement des niveaux). Par RTDS, qui ajoute 1,44 s, un mouvement de Binance devient
+  visible dans Chainlink **2 à 3,5 s** plus tard.
 - **Réaction du carnet Polymarket.** Méthode : régression du milieu Up sur les rendements Binance
   décalés, pas de 50 ms, phase 3, heure des serveurs. Le milieu intègre **25 / 50 / 75 / 90 %**
   du mouvement à **150 / 250 / 300 / 400 ms**. Face à Coinbase : 150 / 200 / 300 / 600 ms, soit
   50 ms de moins, ce qui colle avec l'avance de Binance sur Coinbase.
-- Remarque pour le collecteur `cex_ws` (hors de cette tâche) : seuls `btc/usd` et `btcusdt` sont
-  reçus sur RTDS. `eth/usd` et `ethusdt` n'arrivent pas, sans doute parce qu'un seul filtre est
-  retenu par topic.
+- Remarque pour le collecteur `cex_ws` (hors de cette tâche) : sur RTDS, seules les mises à jour
+  `btc/usd` et `btcusdt` arrivent (3 376 et 3 416 messages). Pour `eth/usd` et `ethusdt`, on ne
+  reçoit que l'instantané initial, sans doute parce qu'un seul filtre est retenu par topic.
 
 ### 1.6 Calcul local (en µs, médiane / p90 ; CPU partagé)
 
 | Étape | Médiane | p90 | Remarque |
 |---|---|---|---|
-| Décodage JSON d'un `aggTrade` (`json` / `orjson`) | 2,8 / 1,1 | 3,0 / 1,6 | |
-| Formule `fair_prob_up` (phase 3, `dt = 1`, scipy) | 86 | 119 | forme continue : 50 µs |
-| Forme fermée Φ(m/s) avec `math.erf` | **0,33** | 0,35 | à préférer sur le chemin critique |
+| Décodage JSON d'un `aggTrade` (`json` / `orjson`) | 2,8 / 1,1 | 3,0 / 1,1 | |
+| Formule `fair_prob_up` (phase 3, `dt = 1`, scipy) | 89 | 143 | forme continue : 52 µs |
+| Forme fermée Φ(m/s) avec `math.erf` | **0,31** | 0,33 | à préférer sur le chemin critique |
 | `taker_edge` | 0,6 | 0,7 | |
-| **Signature EIP-712 d'un ordre V2** avec `py-clob-client-v2` 1.2.0 (`OrderBuilder.build_order`) | **566** | 781 | clé de test jetable, en mémoire, jamais envoyée |
-| Même signature par un chemin direct (séparateur de domaine précalculé, keccak, libsecp256k1 via `coincurve`) | **52** | 83 | signature identique octet pour octet à celle de la bibliothèque (contrôle automatique) |
-| … dont ECDSA secp256k1 seul / keccak-256 | 32 / 8 | 53 / 14 | |
-| En-tête HMAC L2 (`POLY_SIGNATURE`) | 4,0 | 4,1 | |
-| Sérialisation du corps de l'ordre (`json` / `orjson`) | 5,4 / 0,5 | 5,6 / 0,6 | |
-| Pile WebSocket Python en local (bibliothèque `websockets` 17, boucle locale ; asyncio ≈ uvloop) | 108 | 154 | |
+| **Signature EIP-712 d'un ordre V2** avec `py-clob-client-v2` 1.2.0 (`OrderBuilder.build_order`) | **540** | 618 | clé de test jetable, en mémoire, jamais envoyée |
+| Même signature par un chemin direct (séparateur de domaine précalculé, keccak, libsecp256k1 via `coincurve`) | **54** | 99 | signature identique octet pour octet à celle de la bibliothèque (contrôle automatique) |
+| … dont ECDSA secp256k1 seul / keccak-256 | 32 / 8 | 45 / 10 | |
+| En-tête HMAC L2 (`POLY_SIGNATURE`) | 3,9 | 4,0 | |
+| Sérialisation du corps de l'ordre (`json` / `orjson`) | 5,3 / 0,5 | 8,1 / 0,8 | |
+| Pile WebSocket Python en local (bibliothèque `websockets` 17, boucle locale) : asyncio / uvloop | 109 / 97 | 161 / 141 | |
 
 **Tout ce qui se passe dans notre processus prend moins de 1 ms, même en Python**, soit moins de
 0,5 % du budget. Le réseau représente plus de 99 %. Mais les **queues** (ramasse-miettes,
@@ -300,10 +317,11 @@ un réseau privé optimisé ≈ 70 ms. Il n'existe pas de liaison hertzienne sur
   |---|---|
   | jusqu'en février 2026 | 500 ms, retiré sans annonce vers le 20/02/2026 (Protos) |
   | au plus tard juin 2026 | 250 ms, ordres verrouillés à partir du 05/06/2026 (Bitget) |
-  | 17/08/2026, 11:00 UTC | **50 ms** (annonce de @PolymarketDevs) |
+  | 17/08/2026, 11:00 UTC | 50 ms (journal des changements ; annonce de @PolymarketDevs) |
+  | **04/09/2026, 14:00 UTC** | **150 ms**, en hausse (journal des changements) : **valeur en vigueur** |
 
-  La doc « Order lifecycle » affiche encore **250 ms**. Le budget du § 3 est calculé avec les
-  deux valeurs.
+  La page « Order lifecycle » affiche encore 250 ms. Le budget du § 3 utilise les **150 ms** du
+  journal des changements. Les 50 ms de la période du 17/08 au 04/09 sont donnés pour mémoire.
 - **Limites de débit** (par IP, lissées par Cloudflare : mises en file plutôt que rejetées, plus
   un seau de jetons par signataire) :
 
@@ -319,8 +337,9 @@ un réseau privé optimisé ≈ 70 ms. Il n'existe pas de liaison hertzienne sur
   Ce n'est pas une contrainte pour quelques ordres par minute.
 - **Coupe-circuit.** Battement de cœur (`/v1/heartbeats` dans `py-clob-client-v2`) : sans
   battement pendant 10 s, tous les ordres ouverts sont annulés (contrôle toutes les 5 s).
-- **Taille minimale : vraisemblablement 5 parts** (champ `mos: 5` de `/clob-markets`) **[mesuré]**. Frais preneur : 0,07·a·(1 − a) par
-  part, 1,75 c à 0,50. Les makers ne paient rien et reçoivent une remise (`rebateRate 0,2`).
+- **Taille minimale : vraisemblablement 5 parts** (champ `mos: 5` de `/clob-markets`)
+  **[mesuré]**. Frais preneur : 0,07·a·(1 − a) par part, 1,75 c à 0,50. Les makers ne paient rien
+  et reçoivent une remise (`rebateRate 0,2`).
 
 ### 2.4 Retours publics sur les robots « Binance → Polymarket » (2025–2026) [publié]
 
@@ -331,7 +350,8 @@ un réseau privé optimisé ≈ 70 ms. Il n'existe pas de liaison hertzienne sur
   les arbitragistes colocalisés dominent (Protos). Un développeur rapporte que ses stratégies
   « dépendantes du timing de la plateforme » ont cessé de marcher, tandis que les stratégies maker
   ont survécu (dev.to).
-- **Juin puis août 2026** : délai de 250 ms non annulable, puis 50 ms.
+- **Juin, août puis septembre 2026** : délai de 250 ms non annulable, puis 50 ms, puis 150 ms.
+  Après un mois à 50 ms, Polymarket est remonté à 150 ms.
 - **Mesures d'hébergeurs (Dublin, 04/06/2026)** : flux WebSocket ≈ 13–15 ms, aller-retour chaud
   sur `/book` ≈ 21–23 ms en médiane, « bot-vs-bot races decided in the 37–55 ms p99 tails »
   (TradoxVPS). Soustraction faite du réseau Dublin–Londres (≈ 12 ms), Cloudflare et l'origine
@@ -352,13 +372,13 @@ un réseau privé optimisé ≈ 70 ms. Il n'existe pas de liaison hertzienne sur
 | 2. Propagation Tokyo → notre processus (poussée WebSocket comprise) | **97 (113)** **[mesuré]** via le proxy, horloge ± 23 ms | **≈ 107–110** : RTT AWS / 2 + 2–3 ms de poussée **[estimé]** | **≈ 72** : 139,6 / 2 + 2 ms **[estimé]** |
 | 3. Décodage | inclus en 2 (collecteur) ; 0,003 | ≈ 0,01 (Rust/Go ou `orjson`) | ≈ 0,01 |
 | 4. Décision (formule) | 0,09 (scipy) | 0,0003 : seuils de prix précalculés, une comparaison | idem |
-| 5. Signature EIP-712 | **0,57 (0,78)** **[mesuré]** | 0 : ordres **pré-signés** (0,05 s'il faut signer au vol, `coincurve`) | 0 |
+| 5. Signature EIP-712 | **0,54 (0,62)** **[mesuré]** | 0 : ordres **pré-signés** (0,05 s'il faut signer au vol, `coincurve`) | 0 |
 | 6. HMAC L2 + sérialisation | 0,01 | 0,005 | 0,005 |
 | 7. Envoi → frontal Cloudflare → origine du CLOB (connexion chaude) | **66 (75)** : RTT `/time` / 2 via le proxy **[mesuré]** | **≈ 5–6 (p99 ≈ 20)** : 1 ms jusqu'au frontal de Londres + ≈ 5 ms Cloudflare et origine, d'après les mesures de Dublin **[estimé]** | idem B |
 | 8. Validation de l'ordre par le CLOB (signature, solde) | inconnue ; hypothèse 1–5 | idem | idem |
-| 9. **Délai preneur** | **50** (annonce) ou 250 (doc) | 50 ou 250 | 50 ou 250 |
-| **Total jusqu'à l'appariement** (délai de 50 ms) | **216 (235)** : Monte-Carlo sur les distributions mesurées 2 et 7 | **≈ 165–170 (≈ 180)** | **≈ 128–132 (≈ 140)** |
-| Total avec un délai de 250 ms | 416 (435) | ≈ 370 | ≈ 330 |
+| 9. **Délai preneur** | **150** (depuis le 04/09/2026) | 150 | 150 |
+| **Total jusqu'à l'appariement** | **316 (335)** : Monte-Carlo sur les distributions mesurées 2 et 7, hors étape 8 | **≈ 265–270 (≈ 280)** | **≈ 228–232 (≈ 240)** |
+| Pour mémoire : total avec 50 ms (17/08–04/09) | 216 (235) | ≈ 165–170 | ≈ 128–132 |
 | Pour une **annulation** maker (pas de délai) : trade Binance → annulation reçue | ≈ 165 | **≈ 116** | ≈ 78 |
 
 La réponse HTTP (≈ 1 RTT de plus) n'entre pas dans le total : l'appariement a lieu dans le moteur
@@ -425,14 +445,14 @@ authentifié.
 3. **Chainlink Data Streams en direct.** Abonnement payant, à partir de 150 $ par mois et par
    flux ; deux origines en parallèle. Il donne le prix qui sert à la **résolution** plus tôt que
    RTDS, qui arrive 1,44 s après l'observation **[mesuré]**. Il ne sert pas à la course contre
-   Binance (Chainlink a ≈ 2 s de retard sur Binance), mais à connaître **K et le TWAP final
+   Binance (Chainlink a 0,6 à 2 s de retard sur Binance), mais à connaître **K et le TWAP final
    exacts plus tôt**. C'est ce qui compte dans la course de fin de fenêtre : le TWAP final est
    figé 3 s avant la clôture et connu ≈ 1,7 s avant la fin par RTDS
    (`reports/polymarket/arbitrage/`).
 4. **Contournement du noyau (kernel bypass : DPDK, Onload, FPGA) : inutile.** Il fait gagner
-   ≈ 5 à 20 µs par paquet. Le budget se compte en dizaines de ms :
+   ≈ 5 à 20 µs par paquet. Le budget se compte en centaines de ms :
    - 70 à 105 ms de propagation ;
-   - 50 ms de délai preneur imposé ;
+   - 150 ms de délai preneur imposé ;
    - plusieurs ms de Cloudflare (terminaison TLS, pare-feu applicatif), qu'aucune technique
      côté client ne contourne.
 
@@ -447,7 +467,7 @@ authentifié.
 | Calcul | 0 (existant) | 1 instance c7i.large ou xlarge à Londres : ≈ 75–150 $ par mois (0,179 $/h en us-east-1 pour c7i.xlarge, Londres ≈ +10–20 %) | 2 instances (Tokyo + Londres) : ≈ 300 $ par mois |
 | Réseau | 0 | trafic entrant gratuit, sortant de quelques Go (< 5 $) | 2 ports Direct Connect 1 Gbit/s : 0,30 $/h et 0,285 $/h au Japon, ≈ 420 $ par mois ; **opérateur privé sur devis (non publié)** |
 | Données | flux publics gratuits | flux publics gratuits (Binance SBE : clé gratuite) | Chainlink Data Streams : ≥ 150 $ par mois et par flux, soit 300–600 $ pour BTC et ETH, comptant et TWAP |
-| **Total** | 0 | **≈ 100–200 $ par mois** | **≈ 1 000–1 200 $ par mois + opérateur** |
+| **Total** | 0 | **≈ 100–200 $ par mois** | **≈ 1 000–1 300 $ par mois + opérateur** |
 | Complexité | faible | moyenne : client asynchrone, échelles pré-signées, battement de cœur, supervision, reconnexions | élevée : deux sites, réseau privé, Rust/C++, bascule, synchronisation des horloges, conformité |
 
 ### 3.4 Face à ℓ\* : ce que chaque architecture rapporterait
@@ -458,15 +478,24 @@ en supposant qu'on passe premier (borne haute, une matinée de données).
 
 | | Délai | Repricing déjà fait | Gain « si premier » (tous sauts) | Rang probable parmi les preneurs |
 |---|---|---|---|---|
-| A | 216 ms | ≈ 46 % | ≈ +3,8 c | derrière les classes B et C : l'ask périmé est déjà pris |
-| B | ≈ 170 ms | ≈ 31 % | ≈ +5,0 c | derrière les classes C (les « 37–55 ms p99 » de Dublin se jouent entre robots de même classe) |
-| C | ≈ 130 ms | ≈ 20 % | ≈ +5,8 c | à égalité avec les meilleurs ; départage sur la queue (gigue, p99) |
-| A, B, C avec 250 ms de délai | 330–416 ms | ≈ 85–100 % | +1,1 c à +0,4 c (non significatif) | — |
+| A | 316 ms | ≈ 81 % | ≈ +1,3 c (non significatif) | derrière les classes B et C : l'ask périmé est déjà pris |
+| B | ≈ 268 ms | ≈ 66 % | ≈ +2,3 c | derrière les classes C (les « 37–55 ms p99 » de Dublin se jouent entre robots de même classe) |
+| C | ≈ 230 ms | ≈ 52 % | ≈ +3,4 c | à égalité avec les meilleurs ; départage sur la queue (gigue, p99) |
+| Pour mémoire, délai de 50 ms (17/08–04/09) | 130–216 ms | 20–46 % | +5,8 c à +3,8 c | — |
 
-Ordre de grandeur **[estimé]** : 391 sauts de plus de 5 points en 2,75 h sur trois séries
-(rapport sur la formule), au meilleur ask ≈ 67 parts. Même en passant toujours premier avec
-10 parts, la borne haute se compte en dizaines de dollars par heure, avant concurrence. C'est
-trop mince pour payer C, et incertain pour B.
+`reports/latence/` est plus prudent : gain démontré jusqu'à ≈ 127 ms en temps réel seulement, et
+41 % des prix périmés encore présents à 150 ms (27 % à 300 ms), vu d'ici. Aucune des trois
+architectures n'entre dans la zone démontrée. Leur seul gain possible serait sur les prix périmés
+qui survivent plus de 230 à 320 ms, c'est-à-dire ceux que les teneurs de marché n'ont pas jugé
+utile de retirer.
+
+Ordre de grandeur **[estimé]** : le rapport sur la formule compte 391 sauts de plus de 5 points
+en 2,75 h sur trois séries (une matinée, 11 créneaux), avec ≈ 67 parts au meilleur ask. En passant
+**toujours premier** avec 10 parts à ≈ +3 c (niveau de C), la borne haute serait d'environ 40 $
+de l'heure. La
+réalité dépend entièrement du **rang** parmi les preneurs, que rien ici ne permet d'estimer : un
+preneur de classe A ou B arrive après ceux de classe C et ne récupère que ce qu'ils laissent. Ce
+rang, pas la moyenne, décide si B ou C paient leur coût.
 
 ---
 
@@ -476,9 +505,9 @@ trop mince pour payer C, et incertain pour B.
 
 **Non, pas pour la vitesse.** Mesures du § 1.5 :
 
-- l'observation Chainlink suit Binance de ≈ 2 s ;
+- l'observation Chainlink suit Binance de 0,6 à 2 s selon la méthode (§ 1.5) ;
 - RTDS la livre 1,44 s plus tard ;
-- total : ≈ 3,4 s de retard sur Binance.
+- total : 2 à 3,5 s de retard sur Binance, dix fois ℓ\*.
 
 **Oui, pour l'exactitude.** L'issue se décide sur le TWAP60 **Chainlink**. Le suivre point par
 point supprime l'erreur de niveau de Binance, que l'autre workflow chiffre à 1,8–4,3 pb. Surtout,
@@ -488,23 +517,30 @@ Chainlink Data Streams direct (C) fait gagner ≈ 1 s sur RTDS dans la course de
 
 ### 4.2 Être maker : la course à l'annulation
 
-Le délai preneur protège les makers : un ordre preneur reste **50 ms en attente, non annulable**,
-puis il est revalidé contre le carnet **du moment**. Un maker qui annule avant cette échéance
-n'est pas touché.
+Le délai preneur protège les makers : un ordre preneur reste **150 ms en attente, non
+annulable**, puis il est revalidé contre le carnet **du moment**. Un maker qui annule avant cette
+échéance n'est pas touché.
 
 | Qui | Annulation ou arrivée d'ordre (après le trade Binance) | Appariement possible au plus tôt |
 |---|---|---|
 | Maker de classe A (ce conteneur) | ≈ 165 ms | — |
 | Maker de classe B (Londres) | **≈ 116 ms** | — |
-| Preneur de classe C (le plus rapide) | arrivée ≈ 78 ms | **≈ 128 ms** |
-| Preneur de classe B | arrivée ≈ 116 ms | ≈ 166 ms |
+| Preneur de classe C (le plus rapide) | arrivée ≈ 78 ms | **≈ 228 ms** |
+| Preneur de classe B | arrivée ≈ 116 ms | ≈ 266 ms |
 
-**Un maker B gagne la course contre le preneur le plus rapide, avec ≈ 12 ms de marge.** Avec les
-250 ms de la doc, il gagne largement. Même un maker A (≈ 165 ms) gagne contre un preneur B.
+**Un maker B gagne la course contre le preneur le plus rapide, avec ≈ 110 ms de marge.** Un
+maker A, depuis ce conteneur (≈ 165 ms), la gagne aussi, avec ≈ 60 ms de marge. Avec les 50 ms de
+la période du 17/08 au 04/09, la marge d'un maker B n'était que de ≈ 12 ms : la hausse du
+4 septembre a rendu la protection des makers presque gratuite.
+
+Cela explique la courte durée de vie des prix périmés (92 ms en médiane, `reports/latence/`) : les
+makers ont largement le temps d'annuler. La sélection adverse qui leur reste vient sans doute
+surtout de flux informés qui ne dépendent pas de la latence (hypothèse, non testée ici).
 
 Mise en œuvre :
 
-- ordres `postOnly` (GTC, ou GTD à durée courte) autour de la juste valeur ;
+- ordres `postOnly` autour de la juste valeur, en GTC ou en GTD (le CLOB fait expirer un GTD une
+  minute avant l'échéance indiquée) ;
 - annulation au signal Binance : `DELETE /order` par ordre, ou `DELETE /orders` en lot ;
   `cancel-all` est limité à 250 / 10 s ;
 - battement de cœur toutes les 5 s comme coupe-circuit ;
@@ -517,7 +553,7 @@ Limites :
   48 à 72 % sinon, et aucun P&L significatif.
 - **La file d'attente.** On est derrière les ordres déjà posés au même prix : 26 à 61 parts
   en médiane avant S, selon le côté et le prix (`maker_live`).
-- **Le délai peut changer à tout moment** : trois changements en 2026.
+- **Le délai peut changer à tout moment** : quatre changements en 2026.
 
 ### 4.3 Pré-positionner, découper, regrouper
 
@@ -525,17 +561,17 @@ Limites :
   un **FAK** au prix limite « juste valeur − marge » balaie tous les niveaux utiles en un ordre.
   Mieux qu'un FOK, qui échoue si la taille n'est pas entièrement disponible.
 - **`POST /orders` (≤ 15)** : Up à un prix et Down à un autre en un aller-retour, ou plusieurs
-  marchés à la fois (BTC 5m et BTC 15m bougent ensemble). Un seul aller-retour au lieu de deux,
-  mais un seul lot, donc un seul échec possible.
+  marchés à la fois (BTC 5m et BTC 15m bougent ensemble) : un aller-retour au lieu de deux, et la
+  réponse donne le sort de chaque ordre.
 - **Taille.** La profondeur au meilleur ask est de ≈ 30 à 100 parts selon l'instant, et 100 parts
   coûtent ≈ 0,8 c de plus que 10. Au-delà, le gain par part baisse vite, et l'on entre en
   concurrence directe avec les teneurs de marché.
 
 ### 4.4 Risques
 
-- **Règles mouvantes.** Délai preneur (500 → 0 → 250 → 50 ms), frais dynamiques (janvier 2026),
-  résolution par TWAP (août 2026, fenêtre de 30 puis 60 s pour le 5 min) : une infrastructure
-  optimisée pour une règle peut perdre son intérêt du jour au lendemain.
+- **Règles mouvantes.** Délai preneur (500 → 0 → 250 → 50 → 150 ms), frais dynamiques
+  (janvier 2026), résolution par TWAP (août 2026, fenêtre de 30 puis 60 s pour le 5 min) : une
+  infrastructure optimisée pour une règle peut perdre son intérêt du jour au lendemain.
 - **Pannes.**
   - Coupures WebSocket, avec des poignées de main de 0,3 à 0,9 s.
   - Consommateur lent coupé par le serveur (`1013 slow consumer`, constaté le 25/09).
@@ -543,13 +579,13 @@ Limites :
   - Délestage du flux SBE de Binance.
   - Cloudflare qui met les requêtes en file au-delà des limites.
   - Contention CPU : p99 de 6 s mesuré ici.
-- **Horloges.** Les nôtres dérivent de 100 à 400 ms. Celles de Binance et de Polymarket ne sont
-  pas comparables ici à mieux que quelques dizaines de ms près. Un budget mal mesuré conduit à
-  croire qu'on est rapide.
+- **Horloges.** Le retard de la nôtre varie de 100 à 420 ms d'un jour à l'autre. Celles de
+  Binance et de Polymarket ne sont pas comparables ici à mieux que quelques dizaines de ms près.
+  Un budget mal mesuré conduit à croire qu'on est rapide.
 - **Sélection adverse et concurrence.** Dans 15 % des cas, le carnet bouge avant le comptant
   Binance : d'autres ont un meilleur signal. Face à eux, notre « avance » est un piège.
-- **Règlement.** L'appariement est définitif au bloc Polygon, ≈ 2,2 s plus tard. Un échec est
-  rare mais possible.
+- **Règlement.** Le trade n'est réglé qu'au bloc Polygon, ≈ 2,2 s après l'appariement. Un échec
+  est rare mais possible.
 - **Juridique.** Voir § 5. C'est le risque qui prime.
 
 ---
@@ -607,7 +643,8 @@ PYTHONPATH=src /tmp/signenv/bin/python scripts/latency_probe.py compute --out /t
 **Polymarket**
 
 - Polymarket, *Create order* (types, `POST /orders` 1–15, en-têtes L2, domaine EIP-712 V2, `postOnly`, statut `delayed`) : https://docs.polymarket.com/developers/CLOB/orders/create-order
-- Polymarket, *Order lifecycle* (délai preneur de 250 ms, drapeau `itode`, non annulable) : https://docs.polymarket.com/concepts/order-lifecycle
+- Polymarket, *Predictions Changelog* (04/09/2026 : « The taker delay on crypto markets is now `150ms`, up from `50ms` », 14:00 UTC ; 17/08/2026 : 50 ms, en baisse depuis 250 ms) : https://docs.polymarket.com/changelog/predictions
+- Polymarket, *Order lifecycle* (page non mise à jour : 250 ms ; drapeau `itode`, non annulable) : https://docs.polymarket.com/concepts/order-lifecycle
 - Polymarket, *Rate limits* : https://docs.polymarket.com/api-reference/rate-limits
 - Polymarket, *Manage orders* (battement de cœur) : https://docs.polymarket.com/trading/orders/overview
 - Polymarket, *Geoblock* (France et Royaume-Uni « close-only », site et API) : https://docs.polymarket.com/developers/CLOB/geoblock

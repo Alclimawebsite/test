@@ -1,4 +1,4 @@
-slug,etats_deux_cotes,etats_somme_lt_1,etats_croises,somme_min,somme_mediane_ponderee_temps,ms_somme_lt_1
+slug,etats_deux_cotes,etats_somme_lt_1,etats_croises,somme_min,somme_mediane,ms_somme_lt_1
 btc-updown-15m-1790397000,128713,9,28,1,1.01,0.424563
 btc-updown-5m-1790397000,13577,3,5,0.99,1.01,0.099656
 btc-updown-5m-1790397300,89927,34,68,0.98,1.01,4.13373
@@ -46,3 +46,7 @@ btc-updown-15m-1790420400,210681,99,151,0.75,1.01,93.3573
 btc-updown-5m-1790420400,76083,41,72,0.89,1.01,17.4058
 btc-updown-5m-1790420700,97738,19,55,0.94,1.01,43.5784
 btc-updown-5m-1790421000,92557,23,55,0.96,1.01,3.09338
+btc-updown-15m-1790421300,153919,19,34,0.99,1.01,2.09072
+btc-updown-5m-1790421300,53945,22,51,0.97,1.01,107.752
+btc-updown-5m-1790421600,57146,10,15,0.99,1.01,2.91037
+btc-updown-5m-1790421900,71948,12,26,0.97,1.01,14.6635
