@@ -1,6 +1,6 @@
 # Backtest TimesFM (zero-shot) contre baselines — direction à 5, 10 et 15 minutes
 
-*Mis à jour le 2026-09-25 22:56 UTC ; 2 run(s). Chaque `python -m tradebot timesfm-backtest` ajoute ou remplace ses runs.*
+*Mis à jour le 2026-09-26 00:06 UTC ; 8 run(s). Chaque `python -m tradebot timesfm-backtest` ajoute ou remplace ses runs.*
 
 > **Licence** : les poids de TimesFM 3.0 (`timesfm3`) sont sous licence non commerciale (`timesfm-non-commercial-license-v1.0`) : recherche uniquement, aucun trading réel. TimesFM 2.5 (`timesfm2p5`) est sous Apache-2.0.
 >
@@ -14,6 +14,24 @@
 * **SOLUSDT_timesfm3_top5_s60_c512_logprice** (60 origines) — TimesFM ≈ baselines : écarts dans le bruit (n_eff ≈ 60). Accuracy TimesFM contre retournement : h = 5 : 53,3 % contre 51,7 % ; h = 10 : 63,3 % contre 58,3 % ; h = 15 : 51,7 % contre 56,7 %. Avec n_eff ≈ 60 (h = 15), seule une accuracy vraie ≥ 66,1 % serait détectable (puissance 80 %).
   ρ(P(hausse), rendement des 60 min passées) : −0,46 / −0,48 / −0,49 ; IC partiel (hors retournement) : +0,214 / +0,258 / +0,208.
   Mini-stratégie (P brute, seuil 0,55, 10 pb) : −6,5 pb / −4,8 pb / −3,4 pb nets par trade.
+* **BTCUSDT_timesfm3_none_s15_c512_logprice** (1500 origines) — TimesFM ≈ baselines : écarts dans le bruit (n_eff ≈ 1 495). Accuracy TimesFM contre retournement : h = 5 : 51,1 % contre 49,5 % ; h = 10 : 48,4 % contre 48,9 % ; h = 15 : 51,0 % contre 52,0 %. Avec n_eff ≈ 1 492 (h = 15), seule une accuracy vraie ≥ 53,2 % serait détectable (puissance 80 %).
+  ρ(P(hausse), rendement des 60 min passées) : −0,23 / −0,24 / −0,22 ; IC partiel (hors retournement) : −0,012 / −0,035 / −0,017.
+  Mini-stratégie (P brute, seuil 0,55, 10 pb) : −10,3 pb / −10,7 pb / −10,0 pb nets par trade.
+* **SOLUSDT_timesfm3_none_s15_c512_logprice** (1500 origines) — TimesFM ≈ baselines : écarts dans le bruit (n_eff ≈ 1 454). Accuracy TimesFM contre retournement : h = 5 : 51,4 % contre 49,9 % ; h = 10 : 51,3 % contre 50,8 % ; h = 15 : 49,5 % contre 50,9 %. Avec n_eff ≈ 1 440 (h = 15), seule une accuracy vraie ≥ 53,3 % serait détectable (puissance 80 %).
+  ρ(P(hausse), rendement des 60 min passées) : −0,25 / −0,25 / −0,23 ; IC partiel (hors retournement) : +0,014 / −0,010 / −0,018.
+  Mini-stratégie (P brute, seuil 0,55, 10 pb) : −10,2 pb / −10,2 pb / −10,4 pb nets par trade.
+* **ETHUSDT_timesfm3_none_s15_c512_logprice** (1500 origines) — TimesFM ≈ baselines : écarts dans le bruit (n_eff ≈ 1 498). Accuracy TimesFM contre retournement : h = 5 : 51,7 % contre 48,6 % ; h = 10 : 49,3 % contre 51,3 % ; h = 15 : 51,8 % contre 50,6 %. Avec n_eff ≈ 1 498 (h = 15), seule une accuracy vraie ≥ 53,2 % serait détectable (puissance 80 %).
+  ρ(P(hausse), rendement des 60 min passées) : −0,29 / −0,31 / −0,30 ; IC partiel (hors retournement) : +0,002 / −0,038 / −0,023.
+  Mini-stratégie (P brute, seuil 0,55, 10 pb) : −9,8 pb / −10,4 pb / −10,7 pb nets par trade.
+* **BTCUSDT_timesfm3_top5_s15_c512_logprice** (600 origines) — TimesFM fait moins bien qu'une baseline à h = 10. Accuracy TimesFM contre retournement : h = 5 : 47,3 % contre 51,7 % ; h = 10 : 47,0 % contre 49,5 % ; h = 15 : 49,4 % contre 54,1 %. Avec n_eff ≈ 598 (h = 15), seule une accuracy vraie ≥ 55,1 % serait détectable (puissance 80 %).
+  ρ(P(hausse), rendement des 60 min passées) : +0,03 / +0,04 / +0,03 ; IC partiel (hors retournement) : −0,025 / +0,001 / +0,020.
+  Mini-stratégie (P brute, seuil 0,55, 10 pb) : −10,7 pb / −9,4 pb / −9,9 pb nets par trade.
+* **SOLUSDT_timesfm3_top5_s15_c512_logprice** (600 origines) — TimesFM ≈ baselines : écarts dans le bruit (n_eff ≈ 584). Accuracy TimesFM contre retournement : h = 5 : 51,5 % contre 51,7 % ; h = 10 : 49,4 % contre 49,6 % ; h = 15 : 51,4 % contre 55,3 %. Avec n_eff ≈ 567 (h = 15), seule une accuracy vraie ≥ 55,2 % serait détectable (puissance 80 %).
+  ρ(P(hausse), rendement des 60 min passées) : +0,14 / +0,15 / +0,15 ; IC partiel (hors retournement) : −0,026 / +0,016 / +0,033.
+  Mini-stratégie (P brute, seuil 0,55, 10 pb) : −10,4 pb / −10,4 pb / −8,7 pb nets par trade.
+* **ETHUSDT_timesfm3_top5_s15_c512_logprice** (600 origines) — TimesFM ≈ baselines : écarts dans le bruit (n_eff ≈ 598). Accuracy TimesFM contre retournement : h = 5 : 48,4 % contre 51,6 % ; h = 10 : 49,8 % contre 50,5 % ; h = 15 : 49,3 % contre 53,2 %. Avec n_eff ≈ 598 (h = 15), seule une accuracy vraie ≥ 55,1 % serait détectable (puissance 80 %).
+  ρ(P(hausse), rendement des 60 min passées) : −0,01 / +0,01 / +0,00 ; IC partiel (hors retournement) : +0,005 / +0,020 / −0,004.
+  Mini-stratégie (P brute, seuil 0,55, 10 pb) : −9,7 pb / −10,5 pb / −11,0 pb nets par trade.
 
 ## 1. Runs
 
@@ -21,6 +39,12 @@
 |---|---|---|---|---|---|---|---|---|---|---|
 | `BTCUSDT_timesfm3_none_s30_c512_logprice` | BTCUSDT | timesfm3 | none | 30 | 512 | 200 | 2026-05-02 23:00 UTC | 2026-09-25 22:30 UTC | 20 | 10,2 |
 | `SOLUSDT_timesfm3_top5_s60_c512_logprice` | SOLUSDT | timesfm3 | top5 | 60 | 512 | 60 | 2026-09-13 23:00 UTC | 2026-09-25 22:00 UTC | 29 | 2,1 |
+| `BTCUSDT_timesfm3_none_s15_c512_logprice` | BTCUSDT | timesfm3 | none | 15 | 512 | 1 500 | 2026-05-02 23:30 UTC | 2026-09-25 23:15 UTC | 184 | 8,2 |
+| `SOLUSDT_timesfm3_none_s15_c512_logprice` | SOLUSDT | timesfm3 | none | 15 | 512 | 1 500 | 2026-05-02 23:30 UTC | 2026-09-25 23:15 UTC | 260 | 5,8 |
+| `ETHUSDT_timesfm3_none_s15_c512_logprice` | ETHUSDT | timesfm3 | none | 15 | 512 | 1 500 | 2026-05-02 23:30 UTC | 2026-09-25 23:15 UTC | 254 | 5,9 |
+| `BTCUSDT_timesfm3_top5_s15_c512_logprice` | BTCUSDT | timesfm3 | top5 | 15 | 512 | 600 | 2026-05-02 23:45 UTC | 2026-09-25 23:30 UTC | 436 | 1,4 |
+| `SOLUSDT_timesfm3_top5_s15_c512_logprice` | SOLUSDT | timesfm3 | top5 | 15 | 512 | 600 | 2026-05-02 23:45 UTC | 2026-09-25 23:30 UTC | 489 | 1,2 |
+| `ETHUSDT_timesfm3_top5_s15_c512_logprice` | ETHUSDT | timesfm3 | top5 | 15 | 512 | 600 | 2026-05-03 00:00 UTC | 2026-09-25 23:45 UTC | 977 | 0,6 |
 
 ## 2. Détail par run
 
@@ -105,6 +129,275 @@ Backend `timesfm3`, contexte 512 (logprice), pas 60 min, origines du 2026-09-13 
 | `reversal_h` | 10 | 0,50 | 10 | 58 | 60,3 % | +6,37 | −3,63 | 4,06 |
 | `timesfm` | 15 | 0,55 | 10 | 44 | 47,7 % | +6,58 | −3,42 | 4,51 |
 | `reversal_h` | 15 | 0,50 | 10 | 60 | 56,7 % | +7,66 | −2,34 | 4,31 |
+
+### BTCUSDT_timesfm3_none_s15_c512_logprice
+
+Commande : `python -m tradebot timesfm-backtest --tickers BTCUSDT SOLUSDT ETHUSDT --covariates none --stride 15 --max-origins 1500`  
+Backend `timesfm3`, contexte 512 (logprice), pas 15 min, origines du 2026-05-02 23:30 UTC au 2026-09-25 23:15 UTC (1500 sur 14016 candidates, 0 écartées pour trou), covariables : aucune. Walk-forward : 184 s (8,2 origines/s).
+
+![Accuracy BTCUSDT_timesfm3_none_s15_c512_logprice](BTCUSDT_timesfm3_none_s15_c512_logprice_accuracy.png)
+
+| model | sample | horizon | n | n_eff | accuracy | balanced_accuracy | auc | brier | log_loss | acc_w | p_binom | pt_hac_t | dm_brier_vs_reversal_t |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `timesfm` | toutes | 5 | 1 492 | 1 492 | 51,1 % | 51,1 % | 0,498 | 0,2590 | 0,7124 | 50,7 % | 0,196 | +0,85 | +3,55 |
+| `timesfm` | toutes | 10 | 1 495 | 1 495 | 48,4 % | 48,4 % | 0,471 | 0,2674 | 0,7314 | 50,0 % | 0,893 | −1,21 | +5,97 |
+| `timesfm` | toutes | 15 | 1 497 | 1 497 | 51,0 % | 51,0 % | 0,503 | 0,2653 | 0,7292 | 51,3 % | 0,219 | +0,78 | +4,91 |
+| `timesfm_cal` | 2e moitié | 5 | 743 | 743 | 49,4 % | 49,1 % | 0,490 | 0,2527 | 0,6988 | 48,9 % | 0,643 | −0,58 | +1,42 |
+| `timesfm_cal` | 2e moitié | 10 | 747 | 747 | 47,5 % | 47,3 % | 0,455 | 0,2516 | 0,6963 | 48,7 % | 0,918 | −1,80 | +0,22 |
+| `timesfm_cal` | 2e moitié | 15 | 748 | 748 | 49,3 % | 49,7 % | 0,501 | 0,2522 | 0,6975 | 47,1 % | 0,656 | −0,16 | +1,60 |
+| `reversal_h` | toutes | 5 | 1 492 | 1 492 | 49,5 % | 49,4 % | 0,494 | 0,2506 | 0,6944 | 46,6 % | 0,670 | −0,44 | — |
+| `reversal_h` | toutes | 10 | 1 495 | 1 495 | 48,9 % | 48,9 % | 0,488 | 0,2509 | 0,6949 | 50,6 % | 0,810 | −0,89 | — |
+| `reversal_h` | toutes | 15 | 1 497 | 1 497 | 52,0 % | 52,0 % | 0,520 | 0,2496 | 0,6923 | 50,9 % | 0,060 | +1,59 | — |
+| `momentum_h` | toutes | 5 | 1 492 | 1 492 | 50,5 % | 50,6 % | 0,506 | 0,2502 | 0,6935 | 53,5 % | 0,349 | +0,44 | −0,41 |
+| `momentum_h` | toutes | 10 | 1 495 | 1 495 | 51,3 % | 51,3 % | 0,512 | 0,2499 | 0,6930 | 49,6 % | 0,163 | +1,04 | −0,96 |
+| `momentum_h` | toutes | 15 | 1 497 | 1 497 | 48,0 % | 48,0 % | 0,480 | 0,2512 | 0,6956 | 49,2 % | 0,940 | −1,53 | +1,56 |
+| `always_up` | toutes | 5 | 1 492 | 1 492 | 48,8 % | 50,0 % | 0,500 | 0,2509 | 0,6949 | 48,1 % | 0,831 | — | +0,37 |
+| `always_up` | toutes | 10 | 1 495 | 1 495 | 49,5 % | 50,0 % | 0,500 | 0,2506 | 0,6943 | 48,4 % | 0,660 | — | −0,40 |
+| `always_up` | toutes | 15 | 1 497 | 1 497 | 49,2 % | 50,0 % | 0,500 | 0,2507 | 0,6946 | 50,3 % | 0,732 | — | +1,57 |
+| `majority_prev_day` | toutes | 5 | 1 492 | 1 492 | 50,2 % | 50,0 % | 0,501 | 0,2503 | 0,6937 | 51,0 % | 0,449 | −0,04 | −0,46 |
+| `majority_prev_day` | toutes | 10 | 1 495 | 1 495 | 49,0 % | 48,9 % | 0,490 | 0,2508 | 0,6947 | 51,0 % | 0,796 | −0,89 | −0,17 |
+| `majority_prev_day` | toutes | 15 | 1 497 | 1 497 | 48,5 % | 48,4 % | 0,484 | 0,2510 | 0,6951 | 49,8 % | 0,883 | −1,34 | +1,88 |
+
+| horizon | n | coverage_q10_q90 | rho_past_60 | ic_p_up | ic_partial | median_abs_pred_bps | median_abs_ret_bps | frac_pred_gt_cost |
+|---|---|---|---|---|---|---|---|---|
+| 5 | 1 500 | 0,789 | −0,23 | −0,002 | −0,012 | 1,0 | 5,3 | 0,8 % |
+| 10 | 1 499 | 0,789 | −0,24 | −0,025 | −0,035 | 1,7 | 7,3 | 4,4 % |
+| 15 | 1 499 | 0,787 | −0,22 | +0,001 | −0,017 | 2,1 | 8,8 | 8,5 % |
+
+| signal | h | threshold | cost_bps | n_trades | hit_rate | gross_bps_mean | net_bps_mean | net_bps_se |
+|---|---|---|---|---|---|---|---|---|
+| `timesfm` | 5 | 0,55 | 10 | 791 | 49,2 % | −0,26 | −10,26 | 0,48 |
+| `timesfm_cal` | 5 | 0,55 | 10 | 51 | 43,1 % | −0,99 | −10,99 | 1,15 |
+| `reversal_h` | 5 | 0,50 | 10 | 1 494 | 49,2 % | −0,56 | −10,56 | 0,33 |
+| `timesfm` | 10 | 0,55 | 10 | 868 | 46,4 % | −0,66 | −10,66 | 0,58 |
+| `timesfm_cal` | 10 | 0,55 | 10 | 43 | 37,2 % | −5,37 | −15,37 | 3,15 |
+| `reversal_h` | 10 | 0,50 | 10 | 1 496 | 48,7 % | +0,11 | −9,89 | 0,44 |
+| `timesfm` | 15 | 0,55 | 10 | 929 | 50,1 % | −0,03 | −10,03 | 0,67 |
+| `timesfm_cal` | 15 | 0,55 | 10 | 114 | 49,1 % | −1,14 | −11,14 | 2,12 |
+| `reversal_h` | 15 | 0,50 | 10 | 1 496 | 51,9 % | +0,23 | −9,77 | 0,55 |
+
+### SOLUSDT_timesfm3_none_s15_c512_logprice
+
+Commande : `python -m tradebot timesfm-backtest --tickers BTCUSDT SOLUSDT ETHUSDT --covariates none --stride 15 --max-origins 1500`  
+Backend `timesfm3`, contexte 512 (logprice), pas 15 min, origines du 2026-05-02 23:30 UTC au 2026-09-25 23:15 UTC (1500 sur 14016 candidates, 0 écartées pour trou), covariables : aucune. Walk-forward : 260 s (5,8 origines/s).
+
+![Accuracy SOLUSDT_timesfm3_none_s15_c512_logprice](SOLUSDT_timesfm3_none_s15_c512_logprice_accuracy.png)
+
+| model | sample | horizon | n | n_eff | accuracy | balanced_accuracy | auc | brier | log_loss | acc_w | p_binom | pt_hac_t | dm_brier_vs_reversal_t |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `timesfm` | toutes | 5 | 1 440 | 1 440 | 51,4 % | 51,4 % | 0,517 | 0,2556 | 0,7054 | 50,1 % | 0,152 | +1,01 | +2,22 |
+| `timesfm` | toutes | 10 | 1 454 | 1 454 | 51,3 % | 51,3 % | 0,502 | 0,2610 | 0,7173 | 50,7 % | 0,166 | +0,96 | +4,01 |
+| `timesfm` | toutes | 15 | 1 459 | 1 459 | 49,5 % | 49,5 % | 0,494 | 0,2651 | 0,7272 | 48,7 % | 0,662 | −0,40 | +5,00 |
+| `timesfm_cal` | 2e moitié | 5 | 717 | 717 | 49,1 % | 48,5 % | 0,522 | 0,2502 | 0,6935 | 47,7 % | 0,699 | −0,87 | −0,64 |
+| `timesfm_cal` | 2e moitié | 10 | 725 | 725 | 46,6 % | 49,9 % | 0,518 | 0,2527 | 0,7051 | 49,6 % | 0,968 | — | +1,12 |
+| `timesfm_cal` | 2e moitié | 15 | 730 | 730 | 52,1 % | 49,9 % | 0,500 | 0,2509 | 0,6979 | 49,3 % | 0,142 | −0,24 | +0,62 |
+| `reversal_h` | toutes | 5 | 1 440 | 1 440 | 49,9 % | 49,9 % | 0,496 | 0,2505 | 0,6942 | 49,5 % | 0,532 | −0,09 | — |
+| `reversal_h` | toutes | 10 | 1 454 | 1 454 | 50,8 % | 50,8 % | 0,511 | 0,2500 | 0,6931 | 49,7 % | 0,273 | +0,63 | — |
+| `reversal_h` | toutes | 15 | 1 459 | 1 459 | 50,9 % | 50,9 % | 0,513 | 0,2499 | 0,6929 | 50,1 % | 0,248 | +0,67 | — |
+| `momentum_h` | toutes | 5 | 1 440 | 1 440 | 50,7 % | 50,6 % | 0,504 | 0,2502 | 0,6936 | 51,6 % | 0,308 | +0,49 | −0,29 |
+| `momentum_h` | toutes | 10 | 1 454 | 1 454 | 48,8 % | 48,8 % | 0,489 | 0,2508 | 0,6947 | 50,2 % | 0,834 | −0,98 | +0,84 |
+| `momentum_h` | toutes | 15 | 1 459 | 1 459 | 48,4 % | 48,4 % | 0,487 | 0,2509 | 0,6949 | 50,0 % | 0,896 | −1,24 | +0,99 |
+| `always_up` | toutes | 5 | 1 440 | 1 440 | 48,9 % | 50,0 % | 0,500 | 0,2508 | 0,6948 | 48,4 % | 0,808 | — | +0,42 |
+| `always_up` | toutes | 10 | 1 454 | 1 454 | 49,2 % | 50,0 % | 0,500 | 0,2507 | 0,6946 | 49,3 % | 0,744 | — | +1,05 |
+| `always_up` | toutes | 15 | 1 459 | 1 459 | 48,9 % | 50,0 % | 0,500 | 0,2509 | 0,6949 | 50,6 % | 0,813 | — | +1,31 |
+| `majority_prev_day` | toutes | 5 | 1 440 | 1 440 | 48,5 % | 48,5 % | 0,485 | 0,2510 | 0,6951 | 48,7 % | 0,871 | −1,16 | +0,60 |
+| `majority_prev_day` | toutes | 10 | 1 454 | 1 454 | 51,4 % | 51,4 % | 0,514 | 0,2498 | 0,6928 | 53,0 % | 0,141 | +1,09 | −0,21 |
+| `majority_prev_day` | toutes | 15 | 1 459 | 1 459 | 49,6 % | 49,5 % | 0,495 | 0,2506 | 0,6943 | 50,7 % | 0,643 | −0,39 | +0,94 |
+
+| horizon | n | coverage_q10_q90 | rho_past_60 | ic_p_up | ic_partial | median_abs_pred_bps | median_abs_ret_bps | frac_pred_gt_cost |
+|---|---|---|---|---|---|---|---|---|
+| 5 | 1 500 | 0,789 | −0,25 | +0,023 | +0,014 | 1,6 | 8,4 | 2,5 % |
+| 10 | 1 500 | 0,787 | −0,25 | −0,005 | −0,010 | 2,6 | 11,8 | 9,4 % |
+| 15 | 1 499 | 0,785 | −0,23 | −0,009 | −0,018 | 3,5 | 13,7 | 16,6 % |
+
+| signal | h | threshold | cost_bps | n_trades | hit_rate | gross_bps_mean | net_bps_mean | net_bps_se |
+|---|---|---|---|---|---|---|---|---|
+| `timesfm` | 5 | 0,55 | 10 | 802 | 49,3 % | −0,23 | −10,23 | 0,66 |
+| `timesfm_cal` | 5 | 0,55 | 10 | 0 | — | — | — | — |
+| `reversal_h` | 5 | 0,50 | 10 | 1 437 | 47,5 % | −0,27 | −10,27 | 0,52 |
+| `timesfm` | 10 | 0,55 | 10 | 882 | 48,6 % | −0,21 | −10,21 | 0,85 |
+| `timesfm_cal` | 10 | 0,55 | 10 | 7 | 57,1 % | +0,70 | −9,30 | 4,75 |
+| `reversal_h` | 10 | 0,50 | 10 | 1 453 | 49,5 % | −0,10 | −10,10 | 0,67 |
+| `timesfm` | 15 | 0,55 | 10 | 902 | 47,9 % | −0,39 | −10,39 | 0,98 |
+| `timesfm_cal` | 15 | 0,55 | 10 | 23 | 47,8 % | +2,08 | −7,92 | 8,49 |
+| `reversal_h` | 15 | 0,50 | 10 | 1 465 | 50,0 % | +0,02 | −9,98 | 0,84 |
+
+### ETHUSDT_timesfm3_none_s15_c512_logprice
+
+Commande : `python -m tradebot timesfm-backtest --tickers BTCUSDT SOLUSDT ETHUSDT --covariates none --stride 15 --max-origins 1500`  
+Backend `timesfm3`, contexte 512 (logprice), pas 15 min, origines du 2026-05-02 23:30 UTC au 2026-09-25 23:15 UTC (1500 sur 14016 candidates, 0 écartées pour trou), covariables : aucune. Walk-forward : 254 s (5,9 origines/s).
+
+![Accuracy ETHUSDT_timesfm3_none_s15_c512_logprice](ETHUSDT_timesfm3_none_s15_c512_logprice_accuracy.png)
+
+| model | sample | horizon | n | n_eff | accuracy | balanced_accuracy | auc | brier | log_loss | acc_w | p_binom | pt_hac_t | dm_brier_vs_reversal_t |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `timesfm` | toutes | 5 | 1 498 | 1 498 | 51,7 % | 51,7 % | 0,517 | 0,2556 | 0,7052 | 51,3 % | 0,103 | +1,30 | +2,05 |
+| `timesfm` | toutes | 10 | 1 498 | 1 498 | 49,3 % | 49,3 % | 0,493 | 0,2638 | 0,7236 | 48,5 % | 0,706 | −0,54 | +5,15 |
+| `timesfm` | toutes | 15 | 1 499 | 1 499 | 51,8 % | 51,8 % | 0,511 | 0,2630 | 0,7228 | 49,5 % | 0,090 | +1,32 | +4,14 |
+| `timesfm_cal` | 2e moitié | 5 | 748 | 748 | 50,1 % | 50,1 % | 0,508 | 0,2539 | 0,7043 | 47,0 % | 0,485 | +0,21 | +1,25 |
+| `timesfm_cal` | 2e moitié | 10 | 749 | 749 | 50,2 % | 50,1 % | 0,493 | 0,2510 | 0,6980 | 49,4 % | 0,471 | — | +0,77 |
+| `timesfm_cal` | 2e moitié | 15 | 749 | 749 | 53,0 % | 53,5 % | 0,534 | 0,2496 | 0,6924 | 50,6 % | 0,054 | +1,90 | −0,02 |
+| `reversal_h` | toutes | 5 | 1 498 | 1 498 | 48,6 % | 48,5 % | 0,485 | 0,2510 | 0,6951 | 47,5 % | 0,867 | −1,15 | — |
+| `reversal_h` | toutes | 10 | 1 498 | 1 498 | 51,3 % | 51,2 % | 0,512 | 0,2499 | 0,6930 | 47,3 % | 0,170 | +0,96 | — |
+| `reversal_h` | toutes | 15 | 1 499 | 1 499 | 50,6 % | 50,6 % | 0,507 | 0,2501 | 0,6934 | 48,1 % | 0,321 | +0,49 | — |
+| `momentum_h` | toutes | 5 | 1 498 | 1 498 | 51,5 % | 51,6 % | 0,515 | 0,2498 | 0,6928 | 52,6 % | 0,133 | +1,20 | −1,11 |
+| `momentum_h` | toutes | 10 | 1 498 | 1 498 | 48,8 % | 48,8 % | 0,488 | 0,2509 | 0,6949 | 52,7 % | 0,830 | −0,91 | +0,96 |
+| `momentum_h` | toutes | 15 | 1 499 | 1 499 | 49,3 % | 49,3 % | 0,493 | 0,2507 | 0,6945 | 51,9 % | 0,715 | −0,54 | +0,51 |
+| `always_up` | toutes | 5 | 1 498 | 1 498 | 47,5 % | 50,0 % | 0,500 | 0,2514 | 0,6959 | 49,0 % | 0,974 | — | +0,56 |
+| `always_up` | toutes | 10 | 1 498 | 1 498 | 48,7 % | 50,0 % | 0,500 | 0,2509 | 0,6950 | 48,4 % | 0,855 | — | +1,44 |
+| `always_up` | toutes | 15 | 1 499 | 1 499 | 50,4 % | 50,0 % | 0,500 | 0,2502 | 0,6936 | 50,7 % | 0,378 | — | +0,13 |
+| `majority_prev_day` | toutes | 5 | 1 498 | 1 498 | 50,3 % | 50,0 % | 0,500 | 0,2503 | 0,6937 | 48,8 % | 0,408 | −0,02 | −0,99 |
+| `majority_prev_day` | toutes | 10 | 1 498 | 1 498 | 49,9 % | 49,6 % | 0,496 | 0,2505 | 0,6941 | 47,6 % | 0,551 | −0,34 | +0,73 |
+| `majority_prev_day` | toutes | 15 | 1 499 | 1 499 | 47,0 % | 47,1 % | 0,471 | 0,2516 | 0,6963 | 48,4 % | 0,990 | −2,33 | +2,04 |
+
+| horizon | n | coverage_q10_q90 | rho_past_60 | ic_p_up | ic_partial | median_abs_pred_bps | median_abs_ret_bps | frac_pred_gt_cost |
+|---|---|---|---|---|---|---|---|---|
+| 5 | 1 500 | 0,784 | −0,29 | +0,019 | +0,002 | 1,3 | 7,2 | 2,3 % |
+| 10 | 1 500 | 0,779 | −0,31 | −0,026 | −0,038 | 2,3 | 9,1 | 6,8 % |
+| 15 | 1 499 | 0,777 | −0,30 | −0,014 | −0,023 | 2,9 | 11,4 | 11,9 % |
+
+| signal | h | threshold | cost_bps | n_trades | hit_rate | gross_bps_mean | net_bps_mean | net_bps_se |
+|---|---|---|---|---|---|---|---|---|
+| `timesfm` | 5 | 0,55 | 10 | 810 | 52,1 % | +0,24 | −9,76 | 0,64 |
+| `timesfm_cal` | 5 | 0,55 | 10 | 314 | 50,3 % | +0,12 | −9,88 | 0,74 |
+| `reversal_h` | 5 | 0,50 | 10 | 1 495 | 48,5 % | −0,56 | −10,56 | 0,46 |
+| `timesfm` | 10 | 0,55 | 10 | 890 | 49,0 % | −0,38 | −10,38 | 0,87 |
+| `timesfm_cal` | 10 | 0,55 | 10 | 3 | 66,7 % | +6,20 | −3,80 | 5,09 |
+| `reversal_h` | 10 | 0,50 | 10 | 1 499 | 51,2 % | −0,79 | −10,79 | 0,62 |
+| `timesfm` | 15 | 0,55 | 10 | 917 | 51,5 % | −0,74 | −10,74 | 1,07 |
+| `timesfm_cal` | 15 | 0,55 | 10 | 0 | — | — | — | — |
+| `reversal_h` | 15 | 0,50 | 10 | 1 498 | 50,7 % | −0,67 | −10,67 | 0,77 |
+
+### BTCUSDT_timesfm3_top5_s15_c512_logprice
+
+Commande : `python -m tradebot timesfm-backtest --tickers BTCUSDT SOLUSDT ETHUSDT --covariates top --top-k 5 --stride 15 --max-origins 600`  
+Backend `timesfm3`, contexte 512 (logprice), pas 15 min, origines du 2026-05-02 23:45 UTC au 2026-09-25 23:30 UTC (600 sur 14016 candidates, 0 écartées pour trou), covariables : ema_dist_60, ema_dist_30, sma_dist_30, di_diff_14, ema_gap_5_20. Walk-forward : 436 s (1,4 origines/s).
+
+![Accuracy BTCUSDT_timesfm3_top5_s15_c512_logprice](BTCUSDT_timesfm3_top5_s15_c512_logprice_accuracy.png)
+
+| model | sample | horizon | n | n_eff | accuracy | balanced_accuracy | auc | brier | log_loss | acc_w | p_binom | pt_hac_t | dm_brier_vs_reversal_t |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `timesfm` | toutes | 5 | 598 | 598 | 47,3 % | 47,3 % | 0,490 | 0,2612 | 0,7170 | 44,6 % | 0,911 | −1,36 | +2,60 |
+| `timesfm` | toutes | 10 | 598 | 598 | 47,0 % | 47,0 % | 0,479 | 0,2683 | 0,7338 | 49,5 % | 0,935 | −1,50 | +3,57 |
+| `timesfm` | toutes | 15 | 599 | 599 | 49,4 % | 49,4 % | 0,500 | 0,2669 | 0,7321 | 49,7 % | 0,628 | −0,27 | +3,46 |
+| `timesfm_cal` | 2e moitié | 5 | 298 | 298 | 46,3 % | 49,3 % | 0,518 | 0,2589 | 0,7116 | 42,5 % | 0,909 | — | +1,89 |
+| `timesfm_cal` | 2e moitié | 10 | 298 | 298 | 44,3 % | 49,3 % | 0,503 | 0,2662 | 0,7422 | 42,9 % | 0,979 | — | +3,03 |
+| `timesfm_cal` | 2e moitié | 15 | 299 | 299 | 44,1 % | 49,3 % | 0,458 | 0,2707 | 0,7680 | 41,8 % | 0,981 | — | +3,81 |
+| `reversal_h` | toutes | 5 | 598 | 598 | 51,7 % | 51,8 % | 0,519 | 0,2497 | 0,6925 | 50,8 % | 0,219 | +0,84 | — |
+| `reversal_h` | toutes | 10 | 598 | 598 | 49,5 % | 49,5 % | 0,495 | 0,2506 | 0,6943 | 49,7 % | 0,613 | −0,23 | — |
+| `reversal_h` | toutes | 15 | 599 | 599 | 54,1 % | 54,1 % | 0,539 | 0,2488 | 0,6908 | 57,9 % | 0,025 | +2,04 | — |
+| `momentum_h` | toutes | 5 | 598 | 598 | 48,2 % | 48,0 % | 0,481 | 0,2511 | 0,6954 | 48,6 % | 0,827 | −0,92 | +0,83 |
+| `momentum_h` | toutes | 10 | 598 | 598 | 50,5 % | 50,5 % | 0,505 | 0,2502 | 0,6935 | 50,3 % | 0,419 | +0,23 | −0,24 |
+| `momentum_h` | toutes | 15 | 599 | 599 | 46,2 % | 46,3 % | 0,461 | 0,2520 | 0,6971 | 42,5 % | 0,970 | −1,89 | +1,99 |
+| `always_up` | toutes | 5 | 598 | 598 | 48,3 % | 50,0 % | 0,500 | 0,2511 | 0,6953 | 50,5 % | 0,805 | — | +1,21 |
+| `always_up` | toutes | 10 | 598 | 598 | 49,3 % | 50,0 % | 0,500 | 0,2507 | 0,6945 | 48,1 % | 0,644 | — | +0,06 |
+| `always_up` | toutes | 15 | 599 | 599 | 51,1 % | 50,0 % | 0,500 | 0,2500 | 0,6931 | 49,5 % | 0,312 | — | +1,03 |
+| `majority_prev_day` | toutes | 5 | 598 | 598 | 51,3 % | 51,0 % | 0,512 | 0,2498 | 0,6927 | 52,6 % | 0,270 | +0,51 | +0,09 |
+| `majority_prev_day` | toutes | 10 | 598 | 598 | 56,0 % | 55,9 % | 0,562 | 0,2479 | 0,6890 | 56,6 % | 0,002 | +2,97 | −2,37 |
+| `majority_prev_day` | toutes | 15 | 599 | 599 | 53,9 % | 54,1 % | 0,541 | 0,2488 | 0,6908 | 54,4 % | 0,030 | +1,98 | −0,00 |
+
+| horizon | n | coverage_q10_q90 | rho_past_60 | ic_p_up | ic_partial | median_abs_pred_bps | median_abs_ret_bps | frac_pred_gt_cost |
+|---|---|---|---|---|---|---|---|---|
+| 5 | 599 | 0,728 | +0,03 | −0,025 | −0,025 | 1,1 | 5,4 | 1,3 % |
+| 10 | 599 | 0,788 | +0,04 | −0,002 | +0,001 | 1,9 | 7,2 | 5,0 % |
+| 15 | 599 | 0,781 | +0,03 | +0,018 | +0,020 | 2,5 | 8,3 | 8,8 % |
+
+| signal | h | threshold | cost_bps | n_trades | hit_rate | gross_bps_mean | net_bps_mean | net_bps_se |
+|---|---|---|---|---|---|---|---|---|
+| `timesfm` | 5 | 0,55 | 10 | 373 | 49,1 % | −0,68 | −10,68 | 0,65 |
+| `timesfm_cal` | 5 | 0,55 | 10 | 65 | 50,8 % | +0,60 | −9,40 | 1,50 |
+| `reversal_h` | 5 | 0,50 | 10 | 597 | 51,8 % | +0,18 | −9,82 | 0,51 |
+| `timesfm` | 10 | 0,55 | 10 | 402 | 48,3 % | +0,63 | −9,37 | 0,76 |
+| `timesfm_cal` | 10 | 0,55 | 10 | 299 | 44,1 % | −1,28 | −11,28 | 0,75 |
+| `reversal_h` | 10 | 0,50 | 10 | 599 | 49,4 % | −0,06 | −10,06 | 0,61 |
+| `timesfm` | 15 | 0,55 | 10 | 412 | 50,5 % | +0,08 | −9,92 | 0,98 |
+| `timesfm_cal` | 15 | 0,55 | 10 | 111 | 38,7 % | −2,70 | −12,70 | 1,67 |
+| `reversal_h` | 15 | 0,50 | 10 | 597 | 53,9 % | +1,94 | −8,06 | 0,78 |
+
+### SOLUSDT_timesfm3_top5_s15_c512_logprice
+
+Commande : `python -m tradebot timesfm-backtest --tickers BTCUSDT SOLUSDT ETHUSDT --covariates top --top-k 5 --stride 15 --max-origins 600`  
+Backend `timesfm3`, contexte 512 (logprice), pas 15 min, origines du 2026-05-02 23:45 UTC au 2026-09-25 23:30 UTC (600 sur 14016 candidates, 0 écartées pour trou), covariables : ema_dist_60, ema_dist_30, sma_dist_30, di_diff_14, ema_gap_5_20. Walk-forward : 489 s (1,2 origines/s).
+
+![Accuracy SOLUSDT_timesfm3_top5_s15_c512_logprice](SOLUSDT_timesfm3_top5_s15_c512_logprice_accuracy.png)
+
+| model | sample | horizon | n | n_eff | accuracy | balanced_accuracy | auc | brier | log_loss | acc_w | p_binom | pt_hac_t | dm_brier_vs_reversal_t |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `timesfm` | toutes | 5 | 567 | 567 | 51,5 % | 51,5 % | 0,502 | 0,2611 | 0,7180 | 48,5 % | 0,251 | +0,72 | +2,52 |
+| `timesfm` | toutes | 10 | 585 | 585 | 49,4 % | 49,4 % | 0,487 | 0,2672 | 0,7325 | 50,9 % | 0,630 | −0,29 | +3,22 |
+| `timesfm` | toutes | 15 | 584 | 584 | 51,4 % | 51,3 % | 0,495 | 0,2681 | 0,7363 | 52,8 % | 0,267 | +0,64 | +3,63 |
+| `reversal_h` | toutes | 5 | 567 | 567 | 51,7 % | 51,7 % | 0,517 | 0,2498 | 0,6927 | 49,7 % | 0,225 | +0,83 | — |
+| `reversal_h` | toutes | 10 | 585 | 585 | 49,6 % | 49,6 % | 0,498 | 0,2505 | 0,6941 | 49,0 % | 0,598 | −0,21 | — |
+| `reversal_h` | toutes | 15 | 584 | 584 | 55,3 % | 55,3 % | 0,558 | 0,2481 | 0,6893 | 53,3 % | 0,006 | +2,53 | — |
+| `momentum_h` | toutes | 5 | 567 | 567 | 48,7 % | 48,5 % | 0,483 | 0,2510 | 0,6951 | 51,7 % | 0,749 | −0,73 | +0,76 |
+| `momentum_h` | toutes | 10 | 585 | 585 | 49,9 % | 49,9 % | 0,502 | 0,2503 | 0,6938 | 49,9 % | 0,533 | −0,04 | −0,09 |
+| `momentum_h` | toutes | 15 | 584 | 584 | 43,8 % | 43,9 % | 0,442 | 0,2527 | 0,6985 | 46,2 % | 0,999 | −2,91 | +2,78 |
+| `always_up` | toutes | 5 | 567 | 567 | 48,5 % | 50,0 % | 0,500 | 0,2510 | 0,6951 | 52,3 % | 0,775 | — | +1,06 |
+| `always_up` | toutes | 10 | 585 | 585 | 50,3 % | 50,0 % | 0,500 | 0,2503 | 0,6937 | 50,3 % | 0,467 | — | −0,13 |
+| `always_up` | toutes | 15 | 584 | 584 | 51,2 % | 50,0 % | 0,500 | 0,2499 | 0,6930 | 49,6 % | 0,295 | — | +1,59 |
+| `majority_prev_day` | toutes | 5 | 567 | 567 | 51,1 % | 51,1 % | 0,511 | 0,2499 | 0,6930 | 52,1 % | 0,307 | +0,50 | +0,14 |
+| `majority_prev_day` | toutes | 10 | 585 | 585 | 49,2 % | 49,2 % | 0,492 | 0,2507 | 0,6946 | 51,1 % | 0,660 | −0,36 | +0,23 |
+| `majority_prev_day` | toutes | 15 | 584 | 584 | 51,2 % | 51,3 % | 0,513 | 0,2499 | 0,6930 | 52,5 % | 0,295 | +0,61 | +1,57 |
+
+| horizon | n | coverage_q10_q90 | rho_past_60 | ic_p_up | ic_partial | median_abs_pred_bps | median_abs_ret_bps | frac_pred_gt_cost |
+|---|---|---|---|---|---|---|---|---|
+| 5 | 600 | 0,720 | +0,14 | −0,024 | −0,026 | 1,8 | 9,2 | 6,3 % |
+| 10 | 600 | 0,798 | +0,15 | +0,004 | +0,016 | 3,2 | 12,2 | 11,2 % |
+| 15 | 599 | 0,795 | +0,15 | +0,015 | +0,033 | 4,4 | 13,2 | 19,3 % |
+
+| signal | h | threshold | cost_bps | n_trades | hit_rate | gross_bps_mean | net_bps_mean | net_bps_se |
+|---|---|---|---|---|---|---|---|---|
+| `timesfm` | 5 | 0,55 | 10 | 361 | 47,1 % | −0,40 | −10,40 | 1,02 |
+| `reversal_h` | 5 | 0,50 | 10 | 572 | 48,6 % | −0,29 | −10,29 | 0,82 |
+| `timesfm` | 10 | 0,55 | 10 | 401 | 47,4 % | −0,39 | −10,39 | 1,15 |
+| `reversal_h` | 10 | 0,50 | 10 | 578 | 48,6 % | −0,15 | −10,15 | 0,98 |
+| `timesfm` | 15 | 0,55 | 10 | 411 | 48,4 % | +1,27 | −8,73 | 1,43 |
+| `reversal_h` | 15 | 0,50 | 10 | 588 | 54,4 % | +1,43 | −8,57 | 1,21 |
+
+### ETHUSDT_timesfm3_top5_s15_c512_logprice
+
+Commande : `python -m tradebot timesfm-backtest --tickers BTCUSDT SOLUSDT ETHUSDT --covariates top --top-k 5 --stride 15 --max-origins 600`  
+Backend `timesfm3`, contexte 512 (logprice), pas 15 min, origines du 2026-05-03 00:00 UTC au 2026-09-25 23:45 UTC (600 sur 14016 candidates, 0 écartées pour trou), covariables : ema_dist_60, ema_dist_30, sma_dist_30, di_diff_14, ema_gap_5_20. Walk-forward : 977 s (0,6 origines/s).
+
+![Accuracy ETHUSDT_timesfm3_top5_s15_c512_logprice](ETHUSDT_timesfm3_top5_s15_c512_logprice_accuracy.png)
+
+| model | sample | horizon | n | n_eff | accuracy | balanced_accuracy | auc | brier | log_loss | acc_w | p_binom | pt_hac_t | dm_brier_vs_reversal_t |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `timesfm` | toutes | 5 | 599 | 599 | 48,4 % | 48,4 % | 0,504 | 0,2588 | 0,7119 | 47,8 % | 0,793 | −0,75 | +2,10 |
+| `timesfm` | toutes | 10 | 598 | 598 | 49,8 % | 49,9 % | 0,509 | 0,2590 | 0,7126 | 46,9 % | 0,549 | −0,07 | +1,85 |
+| `timesfm` | toutes | 15 | 598 | 598 | 49,3 % | 49,3 % | 0,501 | 0,2621 | 0,7198 | 47,1 % | 0,644 | −0,32 | +2,67 |
+| `timesfm_cal` | 2e moitié | 5 | 299 | 299 | 48,5 % | 49,5 % | 0,489 | 0,2565 | 0,7140 | 44,2 % | 0,718 | −0,17 | +1,26 |
+| `timesfm_cal` | 2e moitié | 10 | 298 | 298 | 48,0 % | 48,1 % | 0,482 | 0,2528 | 0,6987 | 47,0 % | 0,774 | −0,74 | +0,35 |
+| `reversal_h` | toutes | 5 | 599 | 599 | 51,6 % | 51,6 % | 0,516 | 0,2498 | 0,6927 | 50,4 % | 0,231 | +0,79 | — |
+| `reversal_h` | toutes | 10 | 598 | 598 | 50,5 % | 50,6 % | 0,508 | 0,2501 | 0,6934 | 48,6 % | 0,419 | +0,31 | — |
+| `reversal_h` | toutes | 15 | 598 | 598 | 53,2 % | 53,2 % | 0,531 | 0,2492 | 0,6915 | 50,3 % | 0,065 | +1,59 | — |
+| `momentum_h` | toutes | 5 | 599 | 599 | 48,4 % | 48,4 % | 0,484 | 0,2510 | 0,6952 | 49,6 % | 0,793 | −0,79 | +0,79 |
+| `momentum_h` | toutes | 10 | 598 | 598 | 49,2 % | 49,1 % | 0,492 | 0,2507 | 0,6945 | 51,1 % | 0,674 | −0,47 | +0,34 |
+| `momentum_h` | toutes | 15 | 598 | 598 | 47,0 % | 47,0 % | 0,469 | 0,2516 | 0,6964 | 49,8 % | 0,935 | −1,50 | +1,54 |
+| `always_up` | toutes | 5 | 599 | 599 | 49,1 % | 50,0 % | 0,500 | 0,2508 | 0,6947 | 51,3 % | 0,688 | — | +0,94 |
+| `always_up` | toutes | 10 | 598 | 598 | 51,3 % | 50,0 % | 0,500 | 0,2499 | 0,6929 | 55,2 % | 0,270 | — | −0,22 |
+| `always_up` | toutes | 15 | 598 | 598 | 51,3 % | 50,0 % | 0,500 | 0,2499 | 0,6929 | 54,1 % | 0,270 | — | +0,61 |
+| `majority_prev_day` | toutes | 5 | 599 | 599 | 51,3 % | 51,1 % | 0,511 | 0,2499 | 0,6929 | 50,9 % | 0,284 | +0,55 | +0,12 |
+| `majority_prev_day` | toutes | 10 | 598 | 598 | 47,7 % | 48,0 % | 0,480 | 0,2513 | 0,6958 | 48,2 % | 0,882 | −1,00 | +1,10 |
+| `majority_prev_day` | toutes | 15 | 598 | 598 | 48,5 % | 48,7 % | 0,487 | 0,2510 | 0,6952 | 50,1 % | 0,781 | −0,72 | +1,71 |
+
+| horizon | n | coverage_q10_q90 | rho_past_60 | ic_p_up | ic_partial | median_abs_pred_bps | median_abs_ret_bps | frac_pred_gt_cost |
+|---|---|---|---|---|---|---|---|---|
+| 5 | 599 | 0,689 | −0,01 | −0,001 | +0,005 | 1,4 | 7,3 | 2,7 % |
+| 10 | 599 | 0,756 | +0,01 | +0,016 | +0,020 | 2,4 | 9,5 | 8,7 % |
+| 15 | 599 | 0,778 | +0,00 | −0,004 | −0,004 | 3,2 | 11,1 | 12,5 % |
+
+| signal | h | threshold | cost_bps | n_trades | hit_rate | gross_bps_mean | net_bps_mean | net_bps_se |
+|---|---|---|---|---|---|---|---|---|
+| `timesfm` | 5 | 0,55 | 10 | 365 | 50,1 % | +0,32 | −9,68 | 0,86 |
+| `timesfm_cal` | 5 | 0,55 | 10 | 83 | 49,4 % | −3,51 | −13,51 | 2,02 |
+| `reversal_h` | 5 | 0,50 | 10 | 599 | 51,6 % | +0,09 | −9,91 | 0,63 |
+| `timesfm` | 10 | 0,55 | 10 | 402 | 48,8 % | −0,52 | −10,52 | 1,12 |
+| `timesfm_cal` | 10 | 0,55 | 10 | 53 | 56,6 % | +0,05 | −9,95 | 3,04 |
+| `reversal_h` | 10 | 0,50 | 10 | 597 | 50,6 % | −0,34 | −10,34 | 0,87 |
+| `timesfm` | 15 | 0,55 | 10 | 401 | 48,6 % | −0,96 | −10,96 | 1,45 |
+| `timesfm_cal` | 15 | 0,55 | 10 | 0 | — | — | — | — |
+| `reversal_h` | 15 | 0,50 | 10 | 598 | 53,0 % | +0,08 | −9,92 | 1,08 |
 
 ## 3. Fichiers
 

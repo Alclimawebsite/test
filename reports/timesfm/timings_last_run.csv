@@ -1,6 +1,14 @@
 ticker,step,seconds
-SOLUSDT,chargement,3.13
-SOLUSDT,covariables,1.866
-,chargement TimesFM,4.383
-SOLUSDT,walk-forward TimesFM,28.9
-SOLUSDT,baselines et métriques,0.886
+BTCUSDT,chargement,1.722
+BTCUSDT,covariables,0.528
+,chargement TimesFM,4.604
+BTCUSDT,walk-forward TimesFM,435.89
+BTCUSDT,baselines et métriques,1.04
+SOLUSDT,chargement,3.147
+SOLUSDT,covariables,1.956
+SOLUSDT,walk-forward TimesFM,489.228
+SOLUSDT,baselines et métriques,0.448
+ETHUSDT,chargement,0.997
+ETHUSDT,covariables,0.581
+ETHUSDT,walk-forward TimesFM,977.184
+ETHUSDT,baselines et métriques,0.45
