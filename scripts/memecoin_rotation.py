@@ -51,7 +51,11 @@ def pc(x, d: int = 0, signed: bool = False) -> str:
 
 
 def xm(x, d: int = 2) -> str:
-    return "—" if x is None or not np.isfinite(x) else fr(x, d) + "\u00a0×"
+    if x is None or not np.isfinite(x):
+        return "—"
+    if 0 < abs(x) < 0.1:
+        d = max(d, 1 - int(math.floor(math.log10(abs(x)))))     # 0,003 × plutôt que 0,00 ×
+    return fr(x, d) + "\u00a0×"
 
 
 def day(d) -> str:
@@ -135,9 +139,10 @@ def drawdown_after_A(panel, el, start) -> pd.DataFrame:
 
 def paired_rotations(panel, el, start, n_boot, cost: float) -> pd.DataFrame:
     """Chaque fois qu'une pièce A fait 3x et qu'une pièce éligible est sous 20 % de sa fourchette :
-    B = la plus basse. Rapport de richesse (1 + r_B)/(1 + r_A) × (1 − coût)² − 1 sur h jours : ce que
-    rapporte la rotation par rapport à garder A. Même calcul pour une pièce éligible quelconque
-    (moyenne de toutes les autres)."""
+    B = la plus basse. Écart de richesse pour 1 $ : (1 + r_B)(1 − coût)² − (1 + r_A) sur h jours, ce
+    que la rotation laisse de plus (ou de moins) que garder A ; sa moyenne est l'écart d'espérance de
+    richesse (un rapport de richesses serait gonflé par les cas où A s'effondre). Même calcul pour une
+    pièce éligible quelconque (moyenne de toutes les autres)."""
     p = A_PRIORI
     C = panel.close
     st = states(panel, el, p)["A"]
@@ -164,7 +169,7 @@ def paired_rotations(panel, el, start, n_boot, cost: float) -> pd.DataFrame:
                 continue
             ga = 1 + fw[d, a]
             recs.append({"date": date, "A": panel.symbols[a], "B": panel.symbols[cand[j]],
-                         "rot_B": (1 + f[j]) / ga * k2 - 1, "rot_autre": float(np.mean((1 + f) / ga)) * k2 - 1})
+                         "rot_B": (1 + f[j]) * k2 - ga, "rot_autre": float(np.mean(1 + f)) * k2 - ga})
         df = pd.DataFrame(recs)
         if df.empty:
             continue
@@ -753,8 +758,8 @@ def write_readme(d: dict):
              f"−70 % ou pire dans {pc(dA.loc[60, 'p_dd70'])} des cas à 60 jours et {pc(dA.loc[180, 'p_dd70'])} à 180 jours (pièce "
              f"quelconque : {pc(dT.loc[180, 'p_dd70'])}). Le « repli typique de −70 % » de l'auteur se vérifie donc à long terme ; "
              f"il ne dit pas quand vendre (n = {int(dA.loc[60, 'n'])} événements).")
-    L.append(f"* **La décision de rotation elle-même** (43 cas : vendre A le jour de son 3x, acheter la pièce la plus basse de sa "
-             f"fourchette, frais déduits) : en moyenne **{pc(pB['gain_moyen'], signed=True)}** de richesse à 60 jours par rapport à garder A "
+    L.append(f"* **La décision de rotation elle-même** ({int(pB['n'])} cas : vendre A le jour de son 3x, acheter la pièce la plus basse de sa "
+             f"fourchette, frais déduits) : pour 1 $, la rotation laisse en moyenne **{pc(pB['gain_moyen'], signed=True)}** de richesse à 60 jours par rapport à garder A "
              f"(IC 95 % {pc(pB['ic_lo'], signed=True)} ; {pc(pB['ic_hi'], signed=True)}, médiane {pc(pB['gain_median'], signed=True)}), "
              f"gagnante dans {pc(pB['p_gagne'])} des cas. Vers une pièce éligible quelconque : {pc(pX['gain_moyen'], signed=True)} "
              f"(IC {pc(pX['ic_lo'], signed=True)} ; {pc(pX['ic_hi'], signed=True)}). Aucun des deux n'est démontré.")
@@ -773,8 +778,8 @@ def write_readme(d: dict):
              f"{int(fbest['fenetres_egales'])} égalités. Tous cas réunis : {fw} départs gagnés, {fl} perdus, {ft} égalités.")
     L.append(f"* **Tous les réglages** ({len(grid)} ; {len(rotating)} tournent au moins une fois) : {n_bh} des {len(rotating)} font mieux que "
              f"le détenteur aux mêmes achats. Le meilleur ({best.name}) a un Sharpe dégonflé de **{fr(dsr['dsr'], 2)}** "
-             f"({dsr['n_trials']} séries distinctes ; seuil 0,95). Walk-forward : les {wf['n_egalites']} réglages à égalité en tête sur la "
-             f"1re moitié font en médiane {xm(wf['rot_med'])} sur la 2e, contre {xm(wf['hold_med'])} pour leurs détenteurs.")
+             f"({dsr['n_trials']} séries distinctes ; seuil 0,95). Walk-forward : le réglage choisi sur la 1re moitié fait "
+             f"{xm(wf['rot_med'])} sur la 2e, contre {xm(wf['hold_med'])} pour le détenteur aux mêmes achats.")
     L.append(f"* **Une rotation systématique vers le bas de fourchette détruit de la valeur** : chaque semaine vers les 2 pièces les plus "
              f"basses, {xm(wk2['bas_x'])} la mise contre {xm(wk2['panier_x'])} pour le panier (écart {pc(math.expm1(wk2['exces_bas_panier_log_an']), signed=True)} "
              f"par an, IC {pc(math.expm1(wk2['ic_lo']), signed=True)} ; {pc(math.expm1(wk2['ic_hi']), signed=True)}).")
@@ -821,9 +826,9 @@ def write_readme(d: dict):
     L.append(f"| B en bas de fourchette : « −30 % au pire » | −30 % touché dans {pc(B['p_moins30'])} des cas en 60 jours ; plus bas médian {pc(B['min_median'], signed=True)} |")
     L.append("")
     L.append("## 3. La décision de rotation, appariée\n")
-    L.append("Le jour où A fait 3x : ce que rapporte le fait de vendre A et d'acheter B (ou une pièce quelconque), en richesse finale, "
-             "frais de la vente et de l'achat déduits : (1 + r_B)/(1 + r_A) × (1 − coût)² − 1. IC 95 % par bootstrap en tirant des mois "
-             "entiers.\n")
+    L.append("Le jour où A fait 3x : ce que rapporte, pour 1 $, le fait de vendre A et d'acheter B (ou une pièce quelconque), en "
+             "richesse finale, frais de la vente et de l'achat déduits : (1 + r_B)(1 − coût)² − (1 + r_A). La moyenne est l'écart "
+             "d'espérance de richesse ; la médiane dit ce qui arrive le plus souvent. IC 95 % par bootstrap en tirant des mois entiers.\n")
     L.append(md_table(pairs, [("horizon_j", "horizon", lambda v: f"{int(v)} j"), ("choix", "on achète", str), ("n", "rotations", lambda v: str(int(v))),
                               ("gain_moyen", "gain moyen", lambda v: pc(v, 1, signed=True)), ("ic_lo", "IC 95 % bas", lambda v: pc(v, 1, signed=True)),
                               ("ic_hi", "IC 95 % haut", lambda v: pc(v, 1, signed=True)), ("gain_median", "gain médian", lambda v: pc(v, 1, signed=True)),
@@ -873,10 +878,11 @@ def write_readme(d: dict):
     L.append(f"* Meilleur réglage qui tourne : {best.name}, {xm(float(best['total_x']))} contre {xm(float(best['detenteur_x']))} pour son "
              f"détenteur. Sharpe dégonflé (Bailey et López de Prado, Sharpe **par jour** de l'écart au détenteur, {dsr['n_trials']} séries "
              f"distinctes) : **{fr(dsr['dsr'], 2)}**, sous le seuil de 0,95.")
-    L.append(f"* Walk-forward : sur {day(start)} – {day(pd.Timestamp(wf['coupure']))}, {wf['n_egalites']} réglages qui tournent sont à égalité "
-             f"en tête (même série de rendements). Sur la 2e moitié, ils font en médiane {xm(wf['rot_med'])}, contre {xm(wf['hold_med'])} pour "
-             f"leurs détenteurs et {xm(wf['panier_2e'])} pour le panier ; {pc(wf['part_bat_detenteur'])} battent leur détenteur "
-             f"(`walk_forward.csv`).\n")
+    tete = (f"le meilleur réglage qui tourne ({wf['variantes'][0]})" if wf['n_egalites'] == 1 else
+            f"{wf['n_egalites']} réglages qui tournent, à égalité en tête (même série de rendements)")
+    L.append(f"* Walk-forward : sur {day(start)} – {day(pd.Timestamp(wf['coupure']))}, on retient {tete}. Sur la 2e moitié : "
+             f"{xm(wf['rot_med'])} (médiane), contre {xm(wf['hold_med'])} pour le détenteur aux mêmes achats et {xm(wf['panier_2e'])} pour "
+             f"le panier (`walk_forward.csv`).\n")
     L.append("## 8. Rotation systématique\n")
     L.append("Tous les 7 ou 30 jours, détenir à parts égales les k pièces les plus basses (ou les plus hautes, ou au hasard) de leur "
              "fourchette de 60 jours. Écart au panier : log annualisé, IC 95 % par blocs de 30 jours.\n")
