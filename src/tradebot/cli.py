@@ -17,7 +17,8 @@ Commandes
   déciles prévus ; rappel de la licence non commerciale de TimesFM 3.0.
 * ``polymarket-signal`` : formule exacte P(Up) = Φ(m/s) appliquée **en direct** aux marchés
   Polymarket « Up or Down » (en cours et suivant) : phase, TWAP partiel / K / moyenne finale
-  Binance 1 s, σ (Parkinson ou EWMA), carnet CLOB, espérance preneur de chaque côté et décision,
+  Binance 1 s, σ (EWMA ou Parkinson, × k calibré sur l'historique), carnet CLOB, espérance preneur
+  de chaque côté et décision,
   toutes les N secondes ; journal CSV optionnel complété par l'issue officielle (second passage).
   **Simulation papier** : aucun ordre, aucune clé (voir :mod:`tradebot.polymarket_signal`).
 
@@ -1040,8 +1041,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--duration", default="5m", choices=("5m", "15m"), help="durée du marché (défaut : 5m)")
     sp.add_argument("--interval", type=_positive_float, default=1.0,
                     help="secondes entre deux passages (défaut : 1)")
-    sp.add_argument("--sigma", choices=("parkinson", "ewma"), default="parkinson",
-                    help="σ : Parkinson (hauts/bas 1 min) ou EWMA des rendements 1 s (défaut : parkinson)")
+    sp.add_argument("--sigma", choices=("parkinson", "ewma"), default="ewma",
+                    help="σ : EWMA des rendements 1 s ou Parkinson (hauts/bas 1 min) (défaut : ewma)")
+    sp.add_argument("--sigma-scale", type=_positive_float, default=None,
+                    help="facteur k appliqué à σ (défaut : 1,40 pour ewma, 1,50 pour parkinson, choisis sur "
+                         "l'historique BTC 04/09–13/09 ; 1 = formule brute, trop sûre d'elle)")
     sp.add_argument("--min-edge", type=float, default=0.0,
                     help="espérance minimale pour « acheter », en cents par part (défaut : 0)")
     sp.add_argument("--basis-sd", type=float, default=0.5,
@@ -1114,7 +1118,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             try:
                 run_signal(args.asset, args.duration, interval=args.interval, sigma=args.sigma,
                            once=args.once, log_path=args.log, min_edge=args.min_edge / 100.0,
-                           basis_sd=args.basis_sd / 1e4, max_seconds=args.max_seconds,
+                           basis_sd=args.basis_sd / 1e4, sigma_scale=args.sigma_scale,
+                           max_seconds=args.max_seconds,
                            fill_only=args.fill_outcomes)
             except (OSError, RuntimeError, ValueError) as exc:  # réseau, API, données
                 raise CliError(f"polymarket-signal : {exc}") from exc

@@ -64,6 +64,9 @@ SIG_NAMES = {"park": "Parkinson 1 m (60 min)", "ewma": "EWMA 1 s", "tfm": "Times
 LIVE_QTY = (10, 100)
 MARGIN_DELTA = 0
 MAX_AGE_S = 300
+BLOCK_LAG_S = 2                   # bloc − appariement (médiane mesurée 2,2 s, arrondie à la seconde des prix 1 s)
+SNIPE_LAMBDAS_MS = (0, 50, 100, 200, 300, 500, 1000, 2000, 5000)
+MARKOUT_MS = 10_000
 
 
 class Runtime:
@@ -366,6 +369,8 @@ def run_history(args, rt: Runtime) -> dict:
         evaluate(G, ctx, args)
     with rt("3b. empilement et information au-delà du marché"):
         stacking(G, ctx, args)
+    with rt("3b'. écart formule − marché à information égale (formule vieillie comme le prix du marché)"):
+        equal_information(G, P, bars, ctx, args)
     with rt("3c. P&L preneur selon la latence δ"):
         pnl_latency(G, ctx, args)
     with rt("3d. exemple chiffré à S−10 s"):
@@ -490,6 +495,42 @@ def stacking(G: pd.DataFrame, ctx: dict, args) -> None:
                         "pente_ecart": sl, "pente_lo": sl_lo, "pente_hi": sl_hi})
     ctx["stack"] = pd.DataFrame(out)
     ctx["stack_coefs"] = pd.DataFrame(rows)
+
+
+def equal_information(G: pd.DataFrame, P: fb.SecondPrices, bars: pd.DataFrame, ctx: dict, args) -> None:
+    """Le prix du marché « à t » est le dernier trade de bloc ≤ t : il a été apparié vers
+    t − âge − 2,2 s. La formule corrigée est recalculée à t_eff = t − âge − BLOCK_LAG_S (même
+    information que ce trade), puis pente de l'écart et ΔBrier contre le marché : ce qui reste est
+    l'information de la formule **à information égale**."""
+    test = ~G["train"].to_numpy()
+    y, pm_, age = G["y"].to_numpy(), G["p_mkt"].to_numpy(), G["age"].to_numpy()
+    t, S, E = G["t"].to_numpy(), G["S"].to_numpy(), G["E"].to_numpy()
+    ok_age = np.isfinite(age)
+    t_eff = np.where(ok_age, t - np.nan_to_num(age).astype("int64") - BLOCK_LAG_S, t).astype("int64")
+    kind = ctx["sig_best_k"]
+    if kind == "ewma":
+        sig = np.sqrt(fb.ewma_var_series(P, ctx["hl"]))[t_eff - P.t0]
+    elif kind == "park":
+        sig = fb.bar_sigma_at(fb.parkinson_sigma_series(bars, n=60), t_eff)
+    else:
+        sig = G["sigma_tfm"].to_numpy()
+    inp = fb.formula_inputs(P, t_eff, S, E, lag_s=ctx["lag"])
+    p_eff = fb.formula_probs(inp, S, E, ctx["k_val"] * sig, extra_sd=ctx["basis_sd"])["p"]
+    G["p_corr_eff"] = p_eff
+    p_now = G["p_corr"].to_numpy()
+    boot = pb.SlotBootstrap(G["slot"].to_numpy(), B=args.boot, seed=6)
+    rows = []
+    for k, lab in enumerate(LABELS):
+        m = test & (G["k"] == k).to_numpy() & ok_age & np.isfinite(pm_) & np.isfinite(p_now) & np.isfinite(p_eff)
+        row = {"instant": lab, "n": int(m.sum()), "age_median_s": float(np.median(age[m])) if m.any() else math.nan}
+        for tag, p_ in (("t", p_now), ("t_eff", p_eff)):
+            gap = p_ - pm_
+            e, lo, hi = boot.ratio(gap * (y - pm_), gap * gap, m)
+            row.update({f"pente_{tag}": e, f"pente_{tag}_lo": lo, f"pente_{tag}_hi": hi})
+        e, lo, hi = boot.mean(fb.brier(y, p_eff) - fb.brier(y, pm_), m)
+        row.update({"d_brier_eff": e, "d_brier_eff_lo": lo, "d_brier_eff_hi": hi})
+        rows.append(row)
+    ctx["equal_info"] = pd.DataFrame(rows)
 
 
 def decide(G: pd.DataFrame, margin: float, pcol: str = "p_f") -> tuple[np.ndarray, np.ndarray]:
@@ -723,6 +764,10 @@ def run_live(args, rt: Runtime, H: dict) -> dict:
         live_pnl(EX, ctx, args)
     with rt("4e. délai de réaction du carnet (trades agrégés Binance, ms)"):
         ctx["reaction"] = reaction(markets, series, H, sig_k, k_live, live_cache)
+    with rt("4g. P&L d'un preneur qui suit les sauts de la formule, selon la latence (carnet réel)"):
+        ctx["snipe"] = snipe_latency(markets, ctx["reaction"], args) if len(ctx["reaction"]) else pd.DataFrame()
+    with rt("4h. horloges : réception locale − horodatage serveur Polymarket"):
+        ctx["clock"] = clock_check(markets)
     with rt("4f. retard bloc − appariement (data-api contre WebSocket)"):
         try:
             ctx["block_lag"] = block_lag(markets, live_cache)
@@ -805,6 +850,71 @@ def reaction(markets: list, series: dict, H: dict, sig_k: str, k_live: float, ca
         evs["phase"] = np.select([evs["t_rel_S_s"] <= 0, evs["t_rel_S_s"] <= E - S - 60], [2, 3], 4)
         out.append(evs)
     return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
+
+
+def snipe_latency(markets: list, R: pd.DataFrame, args) -> pd.DataFrame:
+    """Preneur déclenché par les mouvements de la formule (événements de :func:`reaction`) : à
+    ``t_event + λ`` (t_event = 1er instant où |P(g) − P(g − 1 s)| > 5 points, détectable en direct ;
+    horloge serveur Polymarket), achat de 10 parts du côté du mouvement au carnet réel. Gain par part,
+    frais inclus : contre l'issue officielle, et contre le milieu du carnet ``MARKOUT_MS`` plus tard
+    (« markout », bien moins bruité). Filtre optionnel : espérance de la formule à t_event > 0 à l'ask
+    payé. IC : bootstrap groupé par créneau de 15 min."""
+    by_slug = {m.slug: m for m in markets}
+    rows = []
+    for slug, ev in R.groupby("slug"):
+        m = by_slug.get(slug)
+        if m is None:
+            continue
+        y = float(m.resolved_up)
+        ts_mid, mid = fb.mid_path(m)
+        evs = list(ev.itertuples())
+        st = fb.book_states_at(m, [int(r.t_event + lam) for r in evs for lam in SNIPE_LAMBDAS_MS])
+        k = 0
+        for r in evs:
+            side = 1 if r.dP > 0 else -1
+            p_now = r.p0 + r.dP
+            mk = float(fb.step_values(ts_mid, mid, np.array([int(r.t_event + MARKOUT_MS)]))[0])
+            for lam in SNIPE_LAMBDAS_MS:
+                _, _, avg, _ = fb.fill_price(st[k], side, LIVE_QTY[0])
+                k += 1
+                if not np.isfinite(avg):
+                    continue
+                cost = avg + float(fb.taker_fee(avg))
+                rows.append({"slug": slug, "S": m.start_ts, "lam_ms": lam, "prix": avg,
+                             "pnl_issue": (y if side == 1 else 1 - y) - cost,
+                             "markout": (mk if side == 1 else 1 - mk) - cost,
+                             "ev_formule": (p_now if side == 1 else 1 - p_now) - cost})
+    D = pd.DataFrame(rows)
+    out = []
+    if D.empty:
+        return pd.DataFrame()
+    for filt in ("tous les mouvements", "espérance de la formule > 0"):
+        for lam, g in D.groupby("lam_ms"):
+            if filt != "tous les mouvements":
+                g = g[g["ev_formule"] > 0]
+            if g.empty:
+                continue
+            boot = pb.SlotBootstrap(fb.slot_of(g["S"].to_numpy()), B=args.boot, seed=7)
+            row = {"filtre": filt, "lam_ms": lam, "achats": len(g), "marches": g["slug"].nunique(),
+                   "creneaux": int(np.unique(fb.slot_of(g["S"].to_numpy())).size), "prix_moyen": float(g["prix"].mean())}
+            for c in ("markout", "pnl_issue"):
+                e, lo, hi = boot.mean(g[c].to_numpy(), np.isfinite(g[c].to_numpy()))
+                row.update({c: e, f"{c}_lo": lo, f"{c}_hi": hi})
+            out.append(row)
+    return pd.DataFrame(out)
+
+
+def clock_check(markets: list) -> pd.DataFrame:
+    """Réception locale − horodatage serveur Polymarket (ms) des événements de carnet, par marché :
+    l'horloge locale n'entre dans aucune mesure de délai (serveur Polymarket contre serveur Binance),
+    ce contrôle dit seulement de combien elle dérive."""
+    rows = []
+    for m in markets:
+        d = np.array([e[0] / 1e6 - e[1] for e in m.events if e[2] in ("book", "pc") and e[1] > 0])
+        if d.size:
+            rows.append({"slug": m.slug, "S": m.start_ts, "n": int(d.size), "min_ms": float(d.min()),
+                         "mediane_ms": float(np.median(d)), "p95_ms": float(np.quantile(d, 0.95))})
+    return pd.DataFrame(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -989,6 +1099,42 @@ def fig_reaction(R: pd.DataFrame, path: Path) -> str:
     return title
 
 
+def fig_snipe(SN: pd.DataFrame, med_reaction: float, path: Path) -> str:
+    a = SN[SN["filtre"] == "tous les mouvements"].set_index("lam_ms")
+    f = SN[SN["filtre"] != "tous les mouvements"].set_index("lam_ms")
+    sig_a = a[a["markout_lo"] > 0].index
+    last_sig = int(sig_a.max()) if len(sig_a) else 0
+    gone = [int(x) for x in a.index if x > last_sig]
+    title = (f"Sur le carnet réel, suivre les sauts de la formule rapporte {c_(a.loc[0, 'markout'])} par part en frappant dans "
+             f"l'instant, {c_(a.loc[last_sig, 'markout'])} à {last_sig} ms"
+             + (f", plus rien de significatif dès {gone[0]} ms" if gone else "")
+             + " : la fenêtre se ferme en un tiers de seconde")
+    sub = (f"Achat de 10 parts au meilleur ask réel, dans le sens du mouvement, λ ms après le 1er instant où la formule corrigée a bougé de "
+           f"plus de 5 points en 1 s (horloge serveur Polymarket contre trades Binance à la ms). Gain = milieu du carnet "
+           f"{MARKOUT_MS // 1000} s plus tard − prix − frais. {int(a['achats'].max())} mouvements, {int(a['marches'].max())} marchés, "
+           f"{int(a['creneaux'].max())} créneaux de 15 min du 26/09/2026 : IC 95 % (bootstrap groupé par créneau) indicatifs. "
+           f"Trait pointillé : délai de réaction médian du carnet ({n_(med_reaction)} ms).")
+    fig, ax = _fig(10.0, 4.2, title, sub)
+    _style_axes(ax)
+    ax.axhline(0, color=TEXT_2, lw=1.0)
+    for d_, col, lab in ((a, BLUE, "tous les mouvements"), (f, ORANGE, "espérance de la formule > 0 à l'ask")):
+        if d_.empty:
+            continue
+        xs = d_.index.to_numpy(dtype=float)
+        ax.fill_between(xs, 100 * d_["markout_lo"], 100 * d_["markout_hi"], color=col, alpha=0.12, linewidth=0)
+        ax.plot(xs, 100 * d_["markout"], color=col, lw=2.0, marker="o", ms=4, label=lab)
+    ax.axvline(med_reaction, color=TEXT_2, lw=0.9, ls=(0, (3, 3)))
+    ax.set_xscale("symlog", linthresh=100)
+    ax.set_xticks(list(SNIPE_LAMBDAS_MS))
+    ax.set_xticklabels([n_(x) for x in SNIPE_LAMBDAS_MS])
+    ax.set_xlim(-5, SNIPE_LAMBDAS_MS[-1] * 1.1)
+    ax.legend(loc="upper right", frameon=False, fontsize=9, labelcolor=TEXT)
+    ax.set_xlabel("λ : latence entre le saut de la formule et l'arrivée de l'ordre au carnet (ms)", color=TEXT_2, fontsize=9)
+    ax.set_ylabel("gain par part (cents)", color=TEXT_2, fontsize=9)
+    _save(fig, path)
+    return title
+
+
 def fig_live_pnl(LP: pd.DataFrame, path: Path, n_mk: int) -> str:
     q = LP[LP["qte"] == 10]
     b = q[q["variante"] == "brute"].set_index("delta_s")
@@ -1063,6 +1209,7 @@ def write_csvs(H: dict, Lv: dict, rt: Runtime) -> list[tuple[str, str]]:
     w(H["gap_dist"], "ecart_formule_marche.csv", "distribution de l'écart P_formule − p_marché par instant, 2e moitié")
     w(H["stack"], "empilement.csv", "empilement formule + marché (2e moitié) et pente de l'écart sur l'issue")
     w(H["stack_coefs"], "empilement_coefficients.csv", "coefficients de l'empilement appris sur la 1re moitié")
+    w(H.get("equal_info"), "ecart_information_egale.csv", "pente de l'écart et ΔBrier avec la formule recalculée à t − âge du dernier trade − 2 s (information égale), 2e moitié")
     w(H["pnl"], "pnl_latence.csv", "P&L preneur par variante × groupe d'instants × δ (δ = −1 : ask estimé à t), 2e moitié")
     w(H["margin_tab"], "marge_par_moitie.csv", "P&L par marge × moitié × δ (choix de la marge sur la 1re moitié)")
     w(H["sig_sel"], "choix_sigma.csv", "log-loss 1re moitié de chaque σ, brut et × k")
@@ -1078,6 +1225,8 @@ def write_csvs(H: dict, Lv: dict, rt: Runtime) -> list[tuple[str, str]]:
         w(Lv.get("live_pnl"), "carnet_pnl.csv", "carnet réel : P&L par variante × δ × quantité, IC")
         w(Lv.get("live_book"), "carnet_profondeur.csv", "carnet réel : écart et tailles médianes au meilleur ask par instant")
         w(Lv.get("reaction"), "carnet_reaction.csv", "mouvements de la formule > 5 points et délai de réaction du carnet (ms)")
+        w(Lv.get("snipe"), "carnet_reaction_pnl.csv", "gain d'un preneur qui suit les sauts de la formule, selon la latence λ (markout 10 s et issue), IC")
+        w(Lv.get("clock"), "horloge_rx_serveur.csv", "réception locale − horodatage serveur Polymarket (ms) par marché")
         bl = Lv.get("block_lag")
         if bl is not None and len(bl):
             q = bl["retard_s"].quantile([0.05, 0.25, 0.5, 0.75, 0.95])
@@ -1103,6 +1252,9 @@ def write_report(H: dict, Lv: dict, rt: Runtime, args) -> None:
         figs["live"] = fig_live_pnl(Lv["live_pnl"], OUT / "pnl_carnet_reel.png", n_mk)
         if len(Lv.get("reaction", [])):
             figs["reaction"] = fig_reaction(Lv["reaction"], OUT / "reaction_carnet.png")
+        if len(Lv.get("snipe", [])):
+            med = float(Lv["reaction"].loc[~Lv["reaction"]["censored"], "delay_ms"].median())
+            figs["snipe"] = fig_snipe(Lv["snipe"], med, OUT / "pnl_reaction_latence.png")
     text = readme(H, Lv, rt, figs, files, lag_block)
     (OUT / "README.md").write_text(text, encoding="utf-8")
 
@@ -1154,8 +1306,9 @@ def readme(H: dict, Lv: dict, rt: Runtime, figs: dict, files: list, lag_block: f
       f"demi-vie {H['hl']} s, le meilleur des trois σ sur la 1re moitié), elle classe bien mais elle est **trop sûre d'elle** : pente de "
       f"calibration {f_(min(sl_b), 2)} à {f_(max(sl_b), 2)} selon la phase (1 = parfait). Quand elle annonce moins de 2 % (K connu), "
       f"l'improbable arrive {fmt_number(tb['observe'], 1, pct=True)} du temps au lieu de {fmt_number(tb['attendu'], 1, pct=True)}. "
-      f"La cause est mesurée : les rendements Binance 1 s sont autocorrélés (+{f_(ac1, 2)} d'une seconde à l'autre) et la variance sur "
-      f"une minute vaut {f_(v60, 2)} × la somme des variances 1 s. Avec σ × {f_(H['k_val'], 2)}, Binance décalé de {H['lag']} s "
+      f"La cause principale est mesurée : les rendements Binance 1 s sont autocorrélés (+{f_(ac1, 2)} d'une seconde à l'autre) et la "
+      f"variance sur une minute vaut {f_(v60, 2)} × la somme des variances 1 s (σ × {f_(math.sqrt(v60), 2)}, pour un facteur retenu de "
+      f"{f_(H['k_val'], 2)} : le reste n'est pas expliqué ici). Avec σ × {f_(H['k_val'], 2)}, Binance décalé de {H['lag']} s "
       f"(Chainlink est en retard) et un bruit de source de {f_(H['basis_sd'] * 1e4, 2)} pb, tous trois fixés sur la 1re moitié, la pente "
       f"passe à {f_(min(sl_c), 2)}–{f_(max(sl_c), 2)} sur la 2e moitié : la formule « corrigée » est calibrée, à ± 0,2 près.")
     w(f"* **Elle ne bat pas le marché.** Au même instant, le prix du dernier trade preneur prévoit aussi bien ou mieux. L'écart de Brier "
@@ -1164,12 +1317,25 @@ def readme(H: dict, Lv: dict, rt: Runtime, figs: dict, files: list, lag_block: f
       + (f"en faveur de la formule à {', '.join(PRETTY[l_] for l_ in better)}." if better else "jamais en faveur de la formule.")
       + f" Les AUC sont identiques (à S : formule {f_(scT.loc[('corrigée', 'S'), 'auc_formule'], 3)}, marché "
       f"{f_(scT.loc[('corrigée', 'S'), 'auc_marche'], 3)}).")
-    w(f"* **Son désaccord avec le marché contient un peu d'information, autour de l'ouverture seulement.** La pente de l'issue sur l'écart "
+    eqi = H["equal_info"].set_index("instant") if len(H.get("equal_info", [])) else None
+    w(f"* **Son désaccord avec le marché ne contient presque rien de plus que l'âge du prix du marché.** La pente de l'issue sur l'écart "
       f"formule − marché vaut {f_(min(slopes_open), 2)} à {f_(max(slopes_open), 2)} de S−10 à S+2 (IC qui exclut 0 à {sig_open} de ces "
       f"5 instants ; 1 voudrait dire « la formule a raison, le marché tort »). Mais l'empilement formule + marché appris sur la 1re moitié "
       f"n'améliore le Brier du marché de façon significative qu'à {', '.join(PRETTY[l_] for l_ in stack_sig) if stack_sig else 'aucun instant'}"
       + (f" ({f_(1e3 * stC.loc[stack_sig[0], 'd_brier_emp_marche'], 2, True)} × 10⁻³, sur un Brier de {f_(stC.loc[stack_sig[0], 'brier_marche'], 3)})" if stack_sig else "")
-      + f", et le dégrade à {', '.join(PRETTY[l_] for l_ in stack_bad) if stack_bad else 'aucun instant'} : l'information en plus est minuscule.")
+      + f", et le dégrade à {', '.join(PRETTY[l_] for l_ in stack_bad) if stack_bad else 'aucun instant'} : l'information en plus est minuscule."
+      + (lambda e: "" if e is None else (
+          " Surtout, le prix du marché est plus vieux que la formule (âge du dernier trade + ≈ 2,2 s de bloc) : **à information égale** "
+          f"(formule recalculée à t − âge − {BLOCK_LAG_S} s, `ecart_information_egale.csv`), la pente tombe à "
+          f"{f_(min(e.loc[l_, 'pente_t_eff'] for l_ in ('S-2', 'S', 'S+2', 'S+5', 'S+10')), 2)} à "
+          f"{f_(max(e.loc[l_, 'pente_t_eff'] for l_ in ('S-2', 'S', 'S+2', 'S+5', 'S+10')), 2)} de S−2 à S+10 ("
+          + (lambda n: "aucun IC n'exclut 0" if n == 0 else f"IC qui exclut 0 à {n} de ces 5 instants")(
+              sum(e.loc[l_, 'pente_t_eff_lo'] > 0 for l_ in ('S-2', 'S', 'S+2', 'S+5', 'S+10')))
+          + ") ; il ne reste qu'un résidu "
+          f"avant l'ouverture ({f_(min(e.loc[l_, 'pente_t_eff'] for l_ in ('S-20', 'S-10', 'S-5')), 2)} à "
+          f"{f_(max(e.loc[l_, 'pente_t_eff'] for l_ in ('S-20', 'S-10', 'S-5')), 2)} de S−20 à S−5, IC qui exclut 0 de peu, sans correction "
+          "pour tests multiples), et le marché devient significativement meilleur que la formule à "
+          f"{sum(e['d_brier_eff_lo'] > 0)} instants sur 17."))(eqi))
     w(f"* **Pour gagner, il faut acheter au prix d'avant la décision.** Règle : acheter si P − coût(ask estimé) > marge (marge fixée sur "
       f"la 1re moitié : {c_(H['margins']['corrigée'], 0)} pour la formule corrigée). P&L par part, frais inclus, 2e moitié : "
       f"{ci_c(pnlC.loc[0, 'pnl_par_part'], pnlC.loc[0, 'lo'], pnlC.loc[0, 'hi'])} au prix du premier trade dont le bloc est ≥ t, "
@@ -1188,7 +1354,21 @@ def readme(H: dict, Lv: dict, rt: Runtime, figs: dict, files: list, lag_block: f
         ok = R[~R["censored"]]["delay_ms"]
         w(f"* **Le carnet réel suit Binance en ≈ {n_(ok.median())} ms** (médiane ; quartiles {n_(ok.quantile(0.25))}–"
           f"{n_(ok.quantile(0.75))} ms ; {n_(len(R))} mouvements de la formule de plus de 5 points en 1 s). "
-          f"{fmt_number(R['censored'].mean(), 0, pct=True)} des mouvements ne sont jamais suivis : le marché n'y croit pas.")
+          f"{fmt_number(R['censored'].mean(), 0, pct=True)} des mouvements ne sont jamais suivis, surtout en fin de fenêtre "
+          f"({fmt_number(R.loc[R['phase'] == 4, 'censored'].mean(), 0, pct=True)} en phase 4, où le carnet est souvent collé à 0,01 ou 0,99).")
+    if Lv and len(Lv.get("snipe", [])):
+        SN = Lv["snipe"]
+        a = SN[SN["filtre"] == "tous les mouvements"].set_index("lam_ms")
+        f = SN[SN["filtre"] != "tous les mouvements"].set_index("lam_ms")
+
+        def mk(d, lam):
+            return ci_c(d.loc[lam, "markout"], d.loc[lam, "markout_lo"], d.loc[lam, "markout_hi"]) if lam in d.index else "—"
+        w(f"* **Mesuré sur le carnet réel, l'avantage d'un preneur rapide dure 300 à 500 ms.** En achetant 10 parts au meilleur ask dans le "
+          f"sens d'un saut de la formule (> 5 points en 1 s), λ ms après le saut, le gain contre le milieu du carnet 10 s plus tard vaut "
+          f"{mk(a, 0)} à λ = 0, {mk(a, 200)} à 200 ms, {mk(a, 300)} à 300 ms, {mk(a, 500)} à 500 ms et {mk(a, 1000)} à 1 s "
+          f"({int(a['achats'].max())} sauts, {int(a['creneaux'].max())} créneaux de 15 min : IC indicatifs). En ne gardant que les sauts où la "
+          f"formule voit une espérance > 0 à l'ask : {mk(f, 0)} à 0 ms, {mk(f, 300)} à 300 ms, {mk(f, 500)} à 500 ms. "
+          "C'est une borne haute : on suppose que notre ordre passe avant ceux des autres preneurs rapides.")
     if Lv and len(Lv.get("live_pnl", [])):
         LP = Lv["live_pnl"]
         b0 = _pick(LP, variante="brute", delta_s=0.0, qte=10)
@@ -1203,8 +1383,9 @@ def readme(H: dict, Lv: dict, rt: Runtime, figs: dict, files: list, lag_block: f
     w(f"* **Verdict : la formule est exacte, mais le marché la connaît et l'applique en un quart de seconde.** Le gain historique "
       f"({c_(pnlC.loc[1, 'pnl_par_part'], 0)} à {c_(pnlC.loc[0, 'pnl_par_part'], 0)} par part, sur {n_(pnlC.loc[0, 'executees'])} achats "
       "en 11 jours) n'existe que contre des prix vieux d'une à deux secondes ; or le carnet se remet à jour ≈ 250 ms après Binance, et ces "
-      "prix ont disparu quand un preneur arrive. Pour gagner, il faudrait voir Binance et frapper le carnet en moins de ≈ 250 ms (vitesse "
-      "d'un teneur de marché), et l'avantage serait alors inférieur à cette borne de quelques cents. Avec une latence d'une seconde ou plus "
+      "prix ont disparu quand un preneur arrive. Pour gagner, il faut voir Binance et frapper le carnet en moins de ≈ 300 ms (vitesse "
+      "d'un teneur de marché) : c'est ce que mesure directement le carnet réel (§ 5 : plusieurs cents par part jusqu'à 200 ms, 0 à 2 c "
+      "à 500 ms, rien à 1 s ; une matinée, en supposant qu'on passe avant les autres preneurs rapides). Avec une latence d'une seconde ou plus "
       f"(un robot qui lit Binance à la seconde), il ne reste rien après frais : {ci_c(pnlC.loc[2, 'pnl_par_part'], pnlC.loc[2, 'lo'], pnlC.loc[2, 'hi'])} "
       "par part à exécution immédiate, négatif ensuite.")
     w("")
@@ -1328,9 +1509,9 @@ def readme(H: dict, Lv: dict, rt: Runtime, figs: dict, files: list, lag_block: f
     w("")
     w(f"**P&L preneur** : à t, ask estimé = prix de référence (VWAP 3 s, sinon dernier trade) + 0,005 pour Up et 1 − référence + 0,005 "
       f"pour Down ; on achète le côté dont l'espérance P − (ask + 0,07·ask·(1 − ask)) dépasse la marge. Prix payé : **premier achat preneur "
-      f"du même jeton dont le bloc est dans [t + δ, t + δ + 2 s]**, δ ∈ {{{', '.join(str(int(d)) for d in fb.HIST_DELAYS)}}} s ; sans "
+      f"du même jeton dont le bloc est dans [t + δ, t + δ + 2 s]**, δ ∈ {{{' ; '.join(str(int(d)) for d in fb.HIST_DELAYS)}}} s ; sans "
       "trade dans la fenêtre, pas d'exécution (comptée à part). Frais 0,07·p·(1 − p), gain 1 si le côté acheté gagne (issue officielle). "
-      f"Marge choisie sur la 1re moitié dans {{{', '.join(fmt_number(100 * m, 1) for m in MARGIN_GRID)}}} c : P&L total maximal à δ = 0 s "
+      f"Marge choisie sur la 1re moitié dans {{{' ; '.join(fmt_number(100 * m, 1 if (100 * m) % 1 else 0) for m in MARGIN_GRID)}}} c : P&L total maximal à δ = 0 s "
       f"(cas le plus favorable), au moins 200 achats exécutés ⇒ **{c_(H['margins']['corrigée'], 0)}** (corrigée), "
       f"**{c_(H['margins']['brute'], 0)}** (brute). "
       + ("À δ = 2 s, **aucune** marge de la grille n'est rentable sur la 1re moitié (voir `marge_par_moitie.csv`) : la règle stricte "
@@ -1421,6 +1602,25 @@ def readme(H: dict, Lv: dict, rt: Runtime, figs: dict, files: list, lag_block: f
       "(plus d'information, prix plus extrêmes). Le marché est aussi bien calibré (pentes ≈ 1) et fait mieux en fin de fenêtre, où il "
       "connaît Chainlink et où l'issue Binance diffère parfois de l'issue officielle.")
     w("")
+    if eqi is not None:
+        eq = H["equal_info"].copy()
+        eq["instant"] = eq["instant"].map(PRETTY)
+        eq["pente de l'écart, formule à t [IC]"] = [f"{f_(a, 2)} [{f_(b, 2)} ; {f_(c, 2)}]" for a, b, c in
+                                                   zip(eq["pente_t"], eq["pente_t_lo"], eq["pente_t_hi"])]
+        eq[f"pente de l'écart, formule à t − âge − {BLOCK_LAG_S} s [IC]"] = [
+            f"{f_(a, 2)} [{f_(b, 2)} ; {f_(c, 2)}]" for a, b, c in zip(eq["pente_t_eff"], eq["pente_t_eff_lo"], eq["pente_t_eff_hi"])]
+        eq["ΔBrier ×10³, formule à information égale − marché [IC]"] = [
+            f"{f_(1e3 * a, 2, True)} [{f_(1e3 * b, 2, True)} ; {f_(1e3 * c, 2, True)}]"
+            for a, b, c in zip(eq["d_brier_eff"], eq["d_brier_eff_lo"], eq["d_brier_eff_hi"])]
+        w(f"**À information égale.** Le prix du marché « à t » est un trade apparié vers t − âge − 2,2 s ; la formule, elle, lit Binance "
+          f"jusqu'à t. Pour comparer ce qui est comparable, la formule corrigée est recalculée à t − âge − {BLOCK_LAG_S} s (même σ, même "
+          "décalage, même bruit). L'« information » de la formule près de l'ouverture était surtout cette avance de 2 à 3 s :")
+        w("")
+        w(to_markdown(eq[["instant", "n", "age_median_s", "pente de l'écart, formule à t [IC]",
+                          f"pente de l'écart, formule à t − âge − {BLOCK_LAG_S} s [IC]",
+                          "ΔBrier ×10³, formule à information égale − marché [IC]"]].rename(columns={"age_median_s": "âge médian (s)"}),
+                      {"âge médian (s)": 0}))
+        w("")
 
     # 4c P&L
     w("### 4c. Peut-on gagner, et à quelle vitesse faut-il agir ?")
@@ -1481,11 +1681,21 @@ def readme(H: dict, Lv: dict, rt: Runtime, figs: dict, files: list, lag_block: f
     if Lv and "mtab" in Lv:
         w("## 5. Carnet réel (collecteur WebSocket, milliseconde)")
         w("")
-        w(f"**n est petit** : {n_live} marchés BTC 5m / BTC 15m / ETH 5m du 26/09/2026 (04:30–06:05 et à partir de 10:00 UTC), "
-          "quelques créneaux de 15 min. Paramètres (demi-vie, k, décalage, bruit de source, marges) repris de l'historique BTC, y compris "
+        ok_m = Lv["mtab"][Lv["mtab"]["statut"] == "exploitable"]
+        spans = pd.to_datetime(ok_m["S"], unit="s", utc=True).sort_values()
+        us = np.unique(ok_m["S"].to_numpy())
+        gaps = np.diff(us)
+        hole = ""
+        if gaps.size and gaps.max() > 1800:
+            j = int(np.argmax(gaps))
+            hole = (f" (aucun marché exploitable entre {pd.Timestamp(int(us[j]), unit='s', tz='UTC'):%H:%M} et "
+                    f"{pd.Timestamp(int(us[j + 1]), unit='s', tz='UTC'):%H:%M})")
+        w(f"**n est petit** : {n_live} marchés BTC 5m / BTC 15m / ETH 5m ouverts entre le {spans.iloc[0]:%d/%m/%Y %H:%M} et le "
+          f"{spans.iloc[-1]:%d/%m/%Y %H:%M} UTC{hole}, "
+          f"{int(np.unique(ok_m['S'].to_numpy() // 900).size)} créneaux de 15 min. Paramètres (demi-vie, k, décalage, bruit de source, marges) repris de l'historique BTC, y compris "
           f"pour ETH. σ : {SIG_NAMES[Lv['sig_raw']]} (brute), {SIG_NAMES[Lv['sig_k']]} × {f_(Lv['k_live'], 2)} (corrigée) ; TimesFM n'est "
           "pas disponible en direct. Décision à t sur le **meilleur ask réel** à t ; exécution au meilleur ask réel à t + δ "
-          f"(δ ∈ {{{', '.join(fmt_number(d, 1) for d in fb.LIVE_DELAYS)}}} s), en parcourant le carnet pour 10 et 100 parts.")
+          f"(δ ∈ {{{' ; '.join(fmt_number(d, 0 if d in (0, 1, 2, 5) else 1) for d in fb.LIVE_DELAYS)}}} s), en parcourant le carnet pour 10 et 100 parts.")
         w("")
         if len(Lv.get("live_book", [])):
             lb = Lv["live_book"].copy()
@@ -1561,7 +1771,13 @@ def readme(H: dict, Lv: dict, rt: Runtime, figs: dict, files: list, lag_block: f
             w("Méthode : formule corrigée recalculée toutes les 20 ms avec le dernier trade agrégé Binance (ms) et σ figé à S−45 s ; "
               "mouvement = |P(g) − P(g − 1 s)| > 0,05, puis 3 s sans nouveau mouvement ; délai = (premier instant où le milieu du carnet a "
               "parcouru la moitié de ΔP depuis sa valeur à g − 1 s) − (instant où la formule a parcouru la moitié de ΔP). Horloges : "
-              "horodatage serveur Polymarket (ms) contre horodatage de trade Binance (ms).")
+              "horodatage serveur Polymarket (ms) contre horodatage de trade Binance (ms) ; l'horloge locale n'intervient pas. "
+              + (lambda ck: "" if ck is None or not len(ck) else (
+                  "Elle dérive d'ailleurs : réception locale − horodatage serveur Polymarket, médiane de "
+                  f"{n_(ck['mediane_ms'].min())} à {n_(ck['mediane_ms'].max())} ms selon le marché (minimum "
+                  f"{n_(ck['min_ms'].min())} ms : l'horloge locale retarde, `horloge_rx_serveur.csv`). "))(Lv.get("clock"))
+              + "L'écart entre les horloges serveur de Polymarket et de Binance n'est pas mesurable ici ; quelques dizaines de ms "
+              "d'erreur sur les délais restent possibles.")
             w("")
             w(to_markdown(pd.DataFrame(rr), {"non suivis": "0%", "médiane (ms)": 0, "quartile 1 (ms)": 0, "quartile 3 (ms)": 0,
                                              "carnet avant la formule": "0%", "< 347 ms": "0%"}))
@@ -1574,6 +1790,27 @@ def readme(H: dict, Lv: dict, rt: Runtime, figs: dict, files: list, lag_block: f
               "Un preneur qui lit les bougies Binance 1 s (≈ 0,5 s de retard en moyenne sur le dernier trade) puis envoie un ordre arrive "
               "après eux.")
             w("")
+        if "snipe" in figs:
+            SN = Lv["snipe"].copy()
+            w("### Gain d'un preneur rapide selon sa latence")
+            w("")
+            w(f"![{figs['snipe']}](pnl_reaction_latence.png)")
+            w("")
+            SN["gain contre le milieu 10 s après [IC]"] = [ci_c(a, b, c) for a, b, c in zip(SN["markout"], SN["markout_lo"], SN["markout_hi"])]
+            SN["gain contre l'issue [IC]"] = [ci_c(a, b, c) for a, b, c in zip(SN["pnl_issue"], SN["pnl_issue_lo"], SN["pnl_issue_hi"])]
+            w("Méthode : pour chaque mouvement de la formule ci-dessus, détecté à l'instant t où |P(t) − P(t − 1 s)| > 0,05 (ce qu'un "
+              "robot verrait en direct), achat de 10 parts du côté du mouvement au carnet réel reconstruit à t + λ (horloge serveur). "
+              "Gain par part, frais 0,07·p·(1 − p) inclus, contre le milieu du carnet 10 s plus tard (peu bruité) et contre l'issue "
+              "officielle (très bruitée). Un seul achat par mouvement ; on suppose passer avant les autres preneurs rapides.")
+            w("")
+            w(to_markdown(SN[["filtre", "lam_ms", "achats", "marches", "creneaux", "prix_moyen", "gain contre le milieu 10 s après [IC]",
+                              "gain contre l'issue [IC]"]].rename(columns={"lam_ms": "λ (ms)", "marches": "marchés", "creneaux": "créneaux",
+                                                                           "prix_moyen": "prix moyen"}), {"prix moyen": 3}))
+            w("")
+            w("Lecture : c'est la mesure directe de la latence nécessaire. L'avantage existe bien (la formule voit le mouvement de Binance "
+              "avant que le carnet ne se remette à jour), mais il s'éteint entre 300 ms et 1 s, pendant que les teneurs de marché "
+              "déplacent leurs prix. Un robot qui lit les bougies Binance 1 s arrive trop tard par construction.")
+            w("")
 
     # 6. limites
     w("## 6. Limites")
@@ -1585,6 +1822,8 @@ def readme(H: dict, Lv: dict, rt: Runtime, figs: dict, files: list, lag_block: f
       "résolvent autrement que Binance ne l'indique : plancher d'erreur en fin de fenêtre.")
     w("* **Carnet réel** : quelques dizaines de marchés sur une matinée, paramètres BTC appliqués à ETH ; conclusions à confirmer quand "
       "la collecte aura couvert plusieurs jours (le collecteur continue).")
+    w("* **Gain d'un preneur rapide** (§ 5) : une matinée, une dizaine de créneaux de 15 min ; on suppose que notre ordre passe avant "
+      "ceux des autres preneurs rapides et que la quantité affichée reste disponible : borne haute.")
     w("* **Tests multiples** : nombreux instants, durées, variantes et latences ; aucune correction dans les IC affichés.")
     w("")
 
@@ -1597,7 +1836,7 @@ def readme(H: dict, Lv: dict, rt: Runtime, figs: dict, files: list, lag_block: f
         w(f"| `{name}` | {desc} |")
     for png, key in (("calibration.png", "calibration"), ("ratio_variance.png", "vr"), ("brier_vs_marche.png", "brier"),
                      ("pnl_latence.png", "pnl"), ("pnl_par_instant.png", "heat"), ("pnl_carnet_reel.png", "live"),
-                     ("reaction_carnet.png", "reaction")):
+                     ("reaction_carnet.png", "reaction"), ("pnl_reaction_latence.png", "snipe")):
         if key in figs:
             w(f"| `{png}` | {figs[key]} |")
     w("")
@@ -1607,7 +1846,7 @@ def readme(H: dict, Lv: dict, rt: Runtime, figs: dict, files: list, lag_block: f
     w("")
     w("## 8. Temps d'exécution")
     w("")
-    w(to_markdown(pd.DataFrame(rt.rows), {"secondes": 1}))
+    w(to_markdown(pd.DataFrame(rt.rows).rename(columns={"etape": "étape"}), {"secondes": 1}))
     w("")
     return "\n".join(L_)
 

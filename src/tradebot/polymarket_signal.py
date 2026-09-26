@@ -11,12 +11,19 @@ Toutes les N secondes :
 3. t = dernière seconde connue ; phase (1 : t ≤ S − 60 ; 2 : S − 60 < t ≤ S ; 3 : S < t ≤ E − 60 ;
    4 : E − 60 < t ≤ E), moyenne de départ réalisée Ā sur (S − 60, t] (phase 2), K = TWAP60(S)
    Binance (phases 3-4), somme finale réalisée B = Σ p(u) / 60 sur (E − 60, t] (phase 4) ;
-4. σ par √s : Parkinson sur les hauts/bas des 60 dernières bougies 1 min (défaut), ou EWMA des
-   rendements 1 s (demi-vie 600 s, choisie sur la 1re moitié dans ``reports/polymarket/maker/``) ;
+4. σ par √s : EWMA des rendements 1 s (demi-vie 600 s, défaut) ou Parkinson sur les hauts/bas des
+   60 dernières bougies 1 min, **multiplié par k** (1,40 pour l'EWMA, 1,50 pour Parkinson : choisis
+   sur le 04/09–13/09 par log-loss, ``reports/polymarket/formule/choix_sigma.csv``). Sans ce facteur,
+   la formule est trop sûre d'elle (pente de calibration 0,69–0,79 sur le 14/09–24/09) : les
+   rendements Binance 1 s sont autocorrélés (+0,11), la variance à 1 min vaut 1,56 × la somme des
+   variances 1 s ;
 5. P(Up) = Φ(m/s) (:func:`tradebot.polymarket_formula.fair_prob_up`, moyennes échantillonnées à 1 s),
    puis **erreur du proxy** : F − K est mesuré sur Binance, l'issue sur Chainlink ; l'écart entre les
    deux variations est ≈ gaussien, sans biais, d'écart-type σ_b ≈ 0,50 pb (BTC 5m + 15m, choisi sur
-   le 04/09–13/09). Décision sur P = Φ(m / √(s² + σ_b²)) ; ``basis_sd = 0`` redonne la formule pure.
+   le 04/09–13/09). Décision sur P = Φ(m / √((k·s)² + σ_b²)) ; ``sigma_scale = 1`` et
+   ``basis_sd = 0`` redonnent la formule pure (colonne ``p_formula``). Contrôle hors échantillon
+   (14/09–24/09, 8 064 marchés × 17 instants) : pente de calibration 1,01 (phase 2) et 1,12 (phase 3)
+   avec k = 1,40, contre 0,69 et 0,79 pour Parkinson brut ;
    Sans ce terme, s -> 0 à la clôture et la formule annonce 0 % ou 100 % même quand F − K Binance ne
    vaut que quelques dixièmes de pb. Vu en direct le 26/09 (btc-updown-5m-1790418000, E − 2 s) :
    F − K Binance = +0,44 pb, formule pure 100 % Up, ask Up 0,01–0,07 ; issue officielle Down
@@ -31,8 +38,11 @@ s'annule dans F − K ; il reste l'erreur σ_b ci-dessus. Contrôle hors échant
 −0,0097 ; −0,0021, bootstrap groupé par créneau de 15 min), log-loss 0,044 contre 0,252.
 Limites connues (non corrigées ici) : le flux Chainlink semble en retard d'≈ 4 s sur Binance
 (décaler la fenêtre Binance de 4 s ramènerait σ_b à ≈ 0,34–0,40 pb sur le test ; non utilisé) ;
-les cotations réagissent à Binance en ≈ 0,35 s, un avantage affiché peut donc avoir disparu avant
-qu'un ordre n'arrive ; σ est supposé constant sur la fenêtre.
+les cotations réagissent à Binance en ≈ 0,25 s, un avantage affiché peut donc avoir disparu avant
+qu'un ordre n'arrive ; σ est supposé constant sur la fenêtre. **Aucune règle d'achat n'est
+rentable à latence réaliste** sur l'historique (``reports/polymarket/formule/``) : acheter à l'ask
+dès que l'espérance dépasse 0 perd ≈ 1 c par part (IC excluant 0) ; les « acheter » affichés ne sont
+que des calculs.
 
 Journal CSV (``--log``) : une ligne par marché et par passage ; l'issue officielle (et les
 ``priceToBeat`` / ``finalPrice`` Chainlink) est ajoutée par un second passage
@@ -70,7 +80,7 @@ __all__ = [
     "BINANCE_KLINES_URL", "PHASE_LABELS", "LOG_COLUMNS", "Signal", "SignalRunner", "PriceBuffer",
     "parse_klines", "phase_of", "formula_inputs", "sigma_from", "book_quotes", "decide", "evaluate_market",
     "format_line", "fill_outcomes", "summarize_log", "format_summary", "gamma_resolver", "run_signal",
-    "PAPER_NOTICE", "BASIS_SD", "prob_with_basis",
+    "PAPER_NOTICE", "BASIS_SD", "SIGMA_SCALE", "MIRROR_TOL", "mirror_gap", "prob_with_basis",
 ]
 
 log = logging.getLogger(__name__)
@@ -83,7 +93,14 @@ INCREMENT_1S_LIMIT = 120          # appels suivants : bougies depuis la dernièr
 BUFFER_KEEP_S = 2400              # historique 1 s conservé (EWMA demi-vie 600 s, fenêtre 15m + 60 s)
 PARKINSON_BARS = 60               # bougies 1 min pour Parkinson (parkinson_60 de l'état des lieux)
 EWMA_HALFLIFE_S = 600.0           # demi-vie choisie sur la 1re moitié (reports/polymarket/maker)
+# Facteur appliqué à σ (log-loss, 04/09–13/09, reports/polymarket/formule/choix_sigma.csv) : sans lui,
+# la formule est trop sûre d'elle (rendements Binance 1 s autocorrélés).
+SIGMA_SCALE = {"ewma": 1.40, "parkinson": 1.50}
 STALE_S = 5.0                     # prix Binance plus vieux que ça : pas de décision
+# Carnets Up et Down lus par deux requêtes : le CLOB est exactement symétrique (bid Up = 1 − ask Down),
+# un écart de plus d'un pas veut dire que le marché a bougé entre les deux lectures (vu en direct le
+# 26/09 à 11:03:13 : Up 0,31/0,32 mais ask Down 0,52, « EV Down +20,8 c » factice) : pas de décision.
+MIRROR_TOL = 0.015
 # Erreur Binance -> Chainlink sur F − K (log) : RMSE de [Δ Chainlink − Δ Binance TWAP60], BTC 5m + 15m,
 # apprentissage 04/09–13/09 (3 840 marchés) : 0,497 pb, biais −0,002 pb ; test 14/09–24/09 : 0,56–0,62 pb.
 BASIS_SD = 0.50e-4
@@ -291,6 +308,14 @@ def book_quotes(book_up: dict | None, book_down: dict | None) -> dict:
             "book_ts": ts.timestamp() if isinstance(ts, pd.Timestamp) else math.nan}
 
 
+def mirror_gap(q: dict) -> float:
+    """Plus grand écart au miroir |bid Up − (1 − ask Down)|, |ask Up − (1 − bid Down)| (0 si les deux
+    lectures de carnet sont cohérentes ; NaN si incalculable)."""
+    gaps = [abs(q["bid_up"] - (1.0 - q["ask_down"])), abs(q["ask_up"] - (1.0 - q["bid_down"]))]
+    gaps = [g for g in gaps if np.isfinite(g)]
+    return max(gaps) if gaps else math.nan
+
+
 def decide(prob_up: float, ask_up: float, ask_down: float, *, fee_rate: float = FEE_RATE,
            min_edge: float = 0.0) -> tuple[float, float, str | None]:
     """(EV Up, EV Down, côté) par part, frais preneur inclus (:func:`taker_edge`).
@@ -346,10 +371,10 @@ class Signal:
     sigma_method: str
     sigma_per_s: float
     mean: float
-    sd: float                 # s(t) de la formule (marche aléatoire seule)
+    sd: float                 # s(t) de la formule pure (marche aléatoire, σ brut)
     basis_sd: float           # σ_b (erreur du proxy Binance -> Chainlink)
-    p_formula: float          # Φ(m/s) : formule pure
-    p_up: float               # Φ(m/√(s² + σ_b²)) : probabilité utilisée pour décider
+    p_formula: float          # Φ(m/s) : formule pure (σ brut, sans σ_b)
+    p_up: float               # Φ(m/√((k·s)² + σ_b²)) : probabilité utilisée pour décider
     bid_up: float
     ask_up: float
     ask_up_size: float
@@ -363,6 +388,7 @@ class Signal:
     min_edge: float
     decision: str
     note: str = ""
+    sigma_scale: float = 1.0  # k : P utilisée = Φ(m / √((k·s)² + σ_b²))
     # complétés par le second passage (fill_outcomes)
     resolved_up: float = math.nan
     price_to_beat_cl: float = math.nan
@@ -385,8 +411,12 @@ def prob_with_basis(mean: float, sd: float, basis_sd: float = BASIS_SD) -> float
 
 def evaluate_market(market: UpDownMarket, *, now: float, logp: pd.Series, sigma: float, sigma_method: str,
                     k_log: float | None, book_up: dict | None, book_down: dict | None,
-                    min_edge: float = 0.0, basis_sd: float = BASIS_SD, stale_s: float = STALE_S) -> Signal:
-    """Calcule la ligne de signal d'un marché à l'instant ``now`` (horloge murale, s Unix)."""
+                    min_edge: float = 0.0, basis_sd: float = BASIS_SD, stale_s: float = STALE_S,
+                    sigma_scale: float = 1.0) -> Signal:
+    """Calcule la ligne de signal d'un marché à l'instant ``now`` (horloge murale, s Unix).
+
+    ``sigma`` : σ brut ; la probabilité de décision utilise ``sigma_scale · s`` et ``basis_sd``,
+    ``p_formula`` reste la formule pure Φ(m/s)."""
     S, E = int(market.start.timestamp()), int(market.end.timestamp())
     t = int(logp.index[-1]) if len(logp) else 0
     q = book_quotes(book_up, book_down)
@@ -406,13 +436,17 @@ def evaluate_market(market: UpDownMarket, *, now: float, logp: pd.Series, sigma:
     else:
         notes.append("aucun prix Binance")
     age = now - t if len(logp) else math.nan
-    p = prob_with_basis(fv.mean, fv.sd, basis_sd) if fv is not None else math.nan
+    p = prob_with_basis(fv.mean, sigma_scale * fv.sd, basis_sd) if fv is not None else math.nan
     ev_up, ev_dn, side = decide(p, q["ask_up"], q["ask_down"], fee_rate=fee, min_edge=min_edge)
     if np.isfinite(age) and age > stale_s:
         notes.append(f"Binance en retard de {age:.0f} s")
         side = None
     if not market.accepting_orders:
         notes.append("marché fermé aux ordres")
+        side = None
+    gap = mirror_gap(q)
+    if np.isfinite(gap) and gap > MIRROR_TOL:
+        notes.append(f"carnets Up/Down incohérents ({gap * 100:.0f} c : marché en mouvement)")
         side = None
     k = inp.price_to_beat if inp is not None and inp.price_to_beat is not None else k_log
     return Signal(
@@ -433,7 +467,7 @@ def evaluate_market(market: UpDownMarket, *, now: float, logp: pd.Series, sigma:
         ask_down=q["ask_down"], ask_down_size=q["ask_down_size"],
         book_ts_s=round(q["book_ts"], 3) if np.isfinite(q["book_ts"]) else math.nan,
         fee_rate=fee, ev_up=ev_up, ev_down=ev_dn, min_edge=min_edge, decision=DECISIONS[side],
-        note=" ; ".join(notes))
+        note=" ; ".join(notes), sigma_scale=sigma_scale)
 
 
 def _num(v: float, dec: int = 2) -> str:
@@ -641,8 +675,8 @@ class SignalRunner:
     """
 
     def __init__(self, asset: str, duration: str, *, client, klines: KlinesFn = binance_klines,
-                 sigma_method: str = "parkinson", min_edge: float = 0.0, basis_sd: float = BASIS_SD,
-                 log_path: Path | str | None = None,
+                 sigma_method: str = "ewma", min_edge: float = 0.0, basis_sd: float = BASIS_SD,
+                 sigma_scale: float | None = None, log_path: Path | str | None = None,
                  resolver: Resolver | None = None, clock: Callable[[], float] = time.time, out=None,
                  max_workers: int = 6):
         asset = asset.lower()
@@ -660,6 +694,9 @@ class SignalRunner:
         if not basis_sd >= 0:
             raise ValueError("basis_sd doit être >= 0")
         self.basis_sd = float(basis_sd)
+        self.sigma_scale = SIGMA_SCALE[sigma_method] if sigma_scale is None else float(sigma_scale)
+        if not self.sigma_scale > 0:
+            raise ValueError("sigma_scale doit être > 0")
         self.log_path = Path(log_path) if log_path else None
         self.resolver = resolver
         self.out = out if out is not None else sys.stdout
@@ -764,7 +801,7 @@ class SignalRunner:
             k = self._k_for(m, logp)
             signals.append(evaluate_market(m, now=now, logp=logp, sigma=sigma, sigma_method=self.sigma_method,
                                            k_log=k, book_up=bu, book_down=bd, min_edge=self.min_edge,
-                                           basis_sd=self.basis_sd))
+                                           basis_sd=self.basis_sd, sigma_scale=self.sigma_scale))
         self._maybe_context(now, logp, sigma)
         for s in signals:
             self._print(format_line(s))
@@ -782,8 +819,8 @@ class SignalRunner:
         sig_bp = sigma * 1e4 if np.isfinite(sigma) else math.nan
         sd_d = sigma * math.sqrt(self.D) * 1e4 if np.isfinite(sigma) else math.nan
         self._print(f"-- {self.symbol} {_num(spot)} $ (Binance, il y a {report.fmt_number(now - t, 1)} s) · "
-                    f"σ {self.sigma_method} = {report.fmt_number(sig_bp, 3)} pb/√s "
-                    f"(≈ {report.fmt_number(sd_d, 1)} pb sur {self.duration})")
+                    f"σ {self.sigma_method} = {report.fmt_number(sig_bp, 3)} pb/√s, × {_num(self.sigma_scale)} "
+                    f"(≈ {report.fmt_number(sd_d * self.sigma_scale, 1)} pb sur {self.duration})")
 
     def maybe_fill(self, force: bool = False) -> int:
         if self.log_path is None or self.resolver is None:
@@ -831,32 +868,38 @@ class SignalRunner:
 
 
 def banner(asset: str, duration: str, sigma_method: str, interval: float, min_edge: float,
-           log_path: Path | str | None, basis_sd: float = BASIS_SD) -> str:
+           log_path: Path | str | None, basis_sd: float = BASIS_SD, sigma_scale: float | None = None) -> str:
+    k = SIGMA_SCALE[sigma_method] if sigma_scale is None else float(sigma_scale)
     sig = ("Parkinson sur les hauts/bas des 60 dernières bougies 1 min" if sigma_method == "parkinson"
            else f"EWMA des rendements 1 s (demi-vie {EWMA_HALFLIFE_S:.0f} s)")
+    sig += (f", × {report.fmt_number(k, 2)} (la formule brute est trop sûre d'elle : facteur choisi sur "
+            "l'historique BTC 04/09–13/09 ; --sigma-scale 1 = brute)")
     return "\n".join([
         f"Signal Polymarket « Up or Down » {asset.upper()} {duration} — formule exacte P(Up) = Φ(m/s) "
         "(marche aléatoire, règle TWAP-60).",
         PAPER_NOTICE,
         f"Prix : Binance {ASSET_TO_SYMBOL[asset]} 1 s ; K = moyenne sur (S−60, S] ; σ : {sig}. "
         "EV = espérance par part achetée au meilleur ask, frais preneur 0,07·a·(1−a) inclus, en cents.",
-        f"P(Up) affichée = Φ(m / √(s² + σ_b²)) : formule exacte + erreur du proxy Binance -> Chainlink "
+        f"P(Up) affichée = Φ(m / √((k·s)² + σ_b²)) : formule exacte + erreur du proxy Binance -> Chainlink "
         f"σ_b = {report.fmt_number(basis_sd * 1e4, 2)} pb (calibrée sur BTC, 04/09–13/09"
         + ("" if asset == "btc" else " ; non vérifiée sur cet actif") + ") ; formule pure : --basis-sd 0.",
         f"Décision : acheter le côté d'EV la plus haute si elle dépasse {_cents(min_edge)} ; sinon rien. "
         f"Passage toutes les {report.fmt_number(interval, 1)} s ; heures UTC"
         + (f" ; journal : {log_path}" if log_path else "") + ".",
         "Mises en garde : σ supposé constant ; Chainlink semble en retard d'≈ 4 s sur Binance (non corrigé) ; "
-        "les cotations réagissent en ≈ 0,35 s : un avantage affiché peut avoir disparu avant exécution.",
+        "les cotations réagissent en ≈ 0,25 s : un avantage affiché peut avoir disparu avant exécution.",
+        "Historique (BTC 04/09–24/09, reports/polymarket/formule) : acheter à l'ask dès que l'EV > 0 perd ≈ 1 c "
+        "par part à latence réelle nulle, et aucun seuil testé n'est rentable ; seul un preneur qui réagit à "
+        "Binance en moins de ≈ 0,3 s gagnait sur le carnet réel. « acheter » n'est pas un conseil.",
         "Phases : 1 attente (t ≤ S−60, P = 0,5) · 2 départ (moyenne de départ en cours) · 3 K connu · "
         "4 final (moyenne finale en cours).",
         "",
     ])
 
 
-def run_signal(asset: str = "btc", duration: str = "5m", *, interval: float = 1.0, sigma: str = "parkinson",
+def run_signal(asset: str = "btc", duration: str = "5m", *, interval: float = 1.0, sigma: str = "ewma",
                once: bool = False, log_path: Path | str | None = None, min_edge: float = 0.0,
-               basis_sd: float = BASIS_SD,
+               basis_sd: float = BASIS_SD, sigma_scale: float | None = None,
                max_seconds: float | None = None, fill_only: bool = False, client=None,
                klines: KlinesFn = binance_klines, resolver: Resolver | None = None,
                clock: Callable[[], float] = time.time, sleep: Callable[[float], None] = time.sleep,
@@ -877,9 +920,10 @@ def run_signal(asset: str = "btc", duration: str = "5m", *, interval: float = 1.
         print(f"Issue officielle ajoutée pour {n} marché(s) : {log_path}", file=out)
         print(format_summary(summarize_log(read_log(log_path))), file=out)
         return 0
-    print(banner(asset, duration, sigma, interval, min_edge, log_path, basis_sd), file=out, flush=True)
+    print(banner(asset, duration, sigma, interval, min_edge, log_path, basis_sd, sigma_scale), file=out, flush=True)
     runner = SignalRunner(asset, duration, client=client, klines=klines, sigma_method=sigma, min_edge=min_edge,
-                          basis_sd=basis_sd, log_path=log_path, resolver=resolver, clock=clock, out=out)
+                          basis_sd=basis_sd, sigma_scale=sigma_scale, log_path=log_path, resolver=resolver,
+                          clock=clock, out=out)
     n = runner.run(interval, once=once, max_seconds=max_seconds, sleep=sleep)
     if log_path is not None and Path(log_path).exists():
         try:

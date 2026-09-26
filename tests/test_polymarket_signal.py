@@ -247,6 +247,48 @@ def test_evaluate_market_matches_direct_formula():
     assert "phase 3 K connu" in line and "E dans 149 s" in line and "Up 0,45/0,47" in line
 
 
+def test_sigma_scale_widens_decision_probability_only():
+    """k·s dans la probabilité de décision ; p_formula reste la formule pure ; défauts du runner."""
+    m = make_market(S0)
+    lp = logp_of(wiggle, S0 - 300, S0 + 150)
+    sigma = 5e-5
+    bu = book_summary(raw_book([(0.45, 10)], [(0.47, 10)]))
+    bd = book_summary(raw_book([(0.53, 10)], [(0.55, 10)]))
+    kw = dict(now=S0 + 150.6, logp=lp, sigma=sigma, sigma_method="ewma", k_log=None, book_up=bu, book_down=bd)
+    base = ps.evaluate_market(m, **kw)
+    wide = ps.evaluate_market(m, **kw, sigma_scale=1.4)
+    assert wide.p_formula == pytest.approx(base.p_formula) and wide.sd == pytest.approx(base.sd)
+    assert wide.p_up == pytest.approx(norm.cdf(base.mean / math.hypot(1.4 * base.sd, ps.BASIS_SD)))
+    assert abs(wide.p_up - 0.5) < abs(base.p_up - 0.5) and wide.sigma_scale == 1.4
+    assert ps.evaluate_market(m, **kw, sigma_scale=1.0).p_up == pytest.approx(base.p_up)
+    clock = Clock(S0 + 100.4)
+    r = ps.SignalRunner("btc", "5m", client=FakeClient(), klines=FakeBinance(clock), clock=clock, out=io.StringIO())
+    assert (r.sigma_method, r.sigma_scale) == ("ewma", ps.SIGMA_SCALE["ewma"]) == ("ewma", 1.40)
+    r.close()
+    r = ps.SignalRunner("btc", "5m", client=FakeClient(), klines=FakeBinance(clock), sigma_method="parkinson",
+                        clock=clock, out=io.StringIO())
+    assert r.sigma_scale == 1.50
+    r.close()
+    with pytest.raises(ValueError):
+        ps.SignalRunner("btc", "5m", client=FakeClient(), klines=FakeBinance(clock), sigma_scale=0.0, clock=clock)
+
+
+def test_inconsistent_up_down_books_block_decision():
+    """Cas vu en direct (26/09, 11:03:13) : Up 0,31/0,32 lu, puis Down lu après un saut du marché
+    (ask Down 0,52) : l'EV Down est factice, pas de décision."""
+    m = make_market(S0)
+    lp = logp_of(wiggle, S0 - 300, S0 + 150)
+    kw = dict(now=S0 + 150.6, logp=lp, sigma=5e-5, sigma_method="ewma", k_log=None)
+    bu = book_summary(raw_book([(0.31, 10)], [(0.32, 10)]))
+    bad = ps.evaluate_market(m, **kw, book_up=bu, book_down=book_summary(raw_book([(0.51, 10)], [(0.52, 10)])))
+    assert bad.decision == "rien" and "incohérents" in bad.note
+    assert ps.mirror_gap(ps.book_quotes(bu, book_summary(raw_book([(0.68, 10)], [(0.69, 10)])))) < 1e-9
+    one_tick = ps.evaluate_market(m, **kw, book_up=bu, book_down=book_summary(raw_book([(0.67, 10)], [(0.70, 10)])))
+    assert "incohérents" not in one_tick.note                          # un pas d'écart : toléré
+    only_up = ps.evaluate_market(m, **kw, book_up=bu, book_down=None)  # côté manquant : miroir, cohérent
+    assert "incohérents" not in only_up.note
+
+
 def test_basis_noise_caps_confidence_at_close():
     """Cas vu en direct le 26/09 à E − 2 s : F − K Binance = +0,44 pb, s = 0,006 pb. La formule pure
     dit 100 % ; avec l'erreur du proxy Binance -> Chainlink (σ_b = 0,5 pb) : Φ(0,44/0,50) ≈ 81 %."""
@@ -282,7 +324,8 @@ def test_tick_current_and_next(tmp_path):
     books = {f"U{S0 + D}": raw_book([(0.49, 10)], [(0.50, 10)]), f"D{S0 + D}": raw_book([(0.50, 10)], [(0.51, 10)])}
     fb, client, out = FakeBinance(clock, price=rising), FakeClient(books), io.StringIO()
     logp = tmp_path / "signal.csv"
-    r = ps.SignalRunner("btc", "5m", client=client, klines=fb, log_path=logp, clock=clock, out=out)
+    r = ps.SignalRunner("btc", "5m", client=client, klines=fb, sigma_method="parkinson", log_path=logp,
+                        clock=clock, out=out)
     sigs = r.tick()
     r.close()
     cur, nxt = sigs
@@ -385,13 +428,14 @@ def test_grouped_bootstrap_ci():
 def test_cli_parser_and_dispatch(monkeypatch, tmp_path):
     p = cli.build_parser()
     a = p.parse_args(["polymarket-signal"])
-    assert (a.asset, a.duration, a.interval, a.sigma, a.once, a.log, a.min_edge) == \
-        ("btc", "5m", 1.0, "parkinson", False, None, 0.0)
+    assert (a.asset, a.duration, a.interval, a.sigma, a.once, a.log, a.min_edge, a.sigma_scale) == \
+        ("btc", "5m", 1.0, "ewma", False, None, 0.0, None)
     b = p.parse_args(["polymarket-signal", "--asset", "eth", "--duration", "15m", "--interval", "2",
                       "--sigma", "ewma", "--once", "--log", "x.csv", "--min-edge", "0.5"])
     assert (b.asset, b.duration, b.interval, b.sigma, b.once, b.log) == ("eth", "15m", 2.0, "ewma", True, "x.csv")
+    assert p.parse_args(["polymarket-signal", "--sigma-scale", "1"]).sigma_scale == 1.0
     for bad in (["polymarket-signal", "--interval", "0"], ["polymarket-signal", "--sigma", "garch"],
-                ["polymarket-signal", "--duration", "1h"]):
+                ["polymarket-signal", "--duration", "1h"], ["polymarket-signal", "--sigma-scale", "0"]):
         with pytest.raises(SystemExit):
             p.parse_args(bad)
     with pytest.raises(SystemExit) as e:
@@ -410,7 +454,7 @@ def test_cli_parser_and_dispatch(monkeypatch, tmp_path):
                      "--log", log_path, "--min-edge", "0.5", "--basis-sd", "0.3"]) == 0
     assert seen["asset"] == "eth" and seen["interval"] == 2.0 and seen["once"] is True
     assert seen["log_path"] == log_path and seen["min_edge"] == pytest.approx(0.005)
-    assert seen["basis_sd"] == pytest.approx(0.3e-4)
+    assert seen["basis_sd"] == pytest.approx(0.3e-4) and seen["sigma_scale"] is None and seen["sigma"] == "ewma"
     assert a.basis_sd == 0.5
     with pytest.raises(SystemExit):
         cli.main(["polymarket-signal", "--basis-sd", "-1"])
