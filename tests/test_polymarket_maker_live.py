@@ -123,16 +123,48 @@ def test_crossing_orders_and_cross_fill():
     (r,) = mk.simulate(m, [mk.Order("t", "up", 0.51, S - 30, S, size=10.0)], latency_ms=0)
     assert r.status == "crossing" and np.isnan(r.q_ahead0) and math.isclose(r.t_placed, S - 30)
     # achat Down à 0,48 = ask Up à 0,52 : ne croise pas (meilleur bid 0,49) ; puis un bid Up à 0,52
-    # apparaît dans le carnet : il nous croise -> exécution "cross".
-    events = BASE + [ev_pc(-20, [(bk.UP, 0.52, 15.0, "B"), (bk.DOWN, 0.48, 15.0, "S")])]
+    # apparaît un instant dans le carnet reconstruit (état croisé transitoire, sans trade) : rien.
+    events = BASE + [ev_pc(-20, [(bk.UP, 0.52, 15.0, "B"), (bk.DOWN, 0.48, 15.0, "S")]),
+                     ev_trade(5, bk.UP, "BUY", 0.51, 1.0, "late")]
     m2 = make_market(events, resolved_up=False)
     (r2,) = mk.simulate(m2, [mk.Order("t", "down", 0.48, S - 30, S, size=10.0)], latency_ms=0)
-    assert r2.status == "filled" and r2.fill_reason == "cross" and math.isclose(r2.t_fill, S - 20)
-    df = mk.results_frame([r, r2], m2)
+    assert r2.status == "cancelled" and r2.filled == 0 and r2.fill_reason == ""
+    # le même état croisé suivi du trade correspondant (BUY Up à 0,52, 50 parts) : la file de 40
+    # devant nous est servie d'abord, puis nous (10) -> "queue".
+    events = BASE + [ev_pc(-20, [(bk.UP, 0.52, 15.0, "B"), (bk.DOWN, 0.48, 15.0, "S")]),
+                     ev_trade(-19.98, bk.UP, "BUY", 0.52, 50.0, "c")]
+    m3 = make_market(events, resolved_up=False)
+    (r3,) = mk.simulate(m3, [mk.Order("t", "down", 0.48, S - 30, S, size=10.0)], latency_ms=0)
+    assert r3.status == "filled" and r3.fill_reason == "queue" and r3.q_ahead0 == 40.0 and math.isclose(r3.t_fill, S - 19.98)
+    df = mk.results_frame([r, r3], m3)
     assert list(df["placed"]) == [False, True] and list(df["status"]) == ["crossing", "filled"]
     df["slot"] = 1
     summ = mk.summarize(df, by=["strategy"]).iloc[0]
-    assert summ["n_orders"] == 1 and summ["n_crossing"] == 1 and summ["share_by_cross"] == 1.0
+    assert summ["n_orders"] == 1 and summ["n_crossing"] == 1 and summ["share_by_queue"] == 1.0
+
+
+def test_book_update_before_trade_message_is_not_counted_twice():
+    # 100 devant nous à 0,49. Le serveur émet d'abord la baisse du niveau (100 -> 40, le trade a
+    # consommé 60) puis, 20 ms plus tard, le message du trade (SELL Up 0,49, 60) : la file passe à
+    # 40, pas à 0 ; il faut encore 40 + 10 pour nous exécuter.
+    events = BASE + [ev_pc(-20.02, [(bk.UP, 0.49, 40.0, "B"), (bk.DOWN, 0.51, 40.0, "S")]),
+                     ev_trade(-20, bk.UP, "SELL", 0.49, 60.0, "a"),
+                     ev_pc(-10.02, [(bk.UP, 0.49, 5.0, "B"), (bk.DOWN, 0.51, 5.0, "S")]),
+                     ev_trade(-10, bk.UP, "SELL", 0.49, 35.0, "b"),
+                     ev_trade(5, bk.UP, "BUY", 0.51, 1.0, "late")]
+    m = make_market(events)
+    (r,) = mk.simulate(m, [mk.Order("t", "up", 0.49, S - 30, S, size=10.0)], latency_ms=0)
+    assert r.status == "cancelled" and r.filled == 0 and r.q_ahead_end == 5.0
+    # avec un trade de 50 au second coup : 40 pour la file, 10 pour nous
+    events2 = events[:-2] + [ev_trade(-10, bk.UP, "SELL", 0.49, 50.0, "b")]
+    (r2,) = mk.simulate(make_market(events2), [mk.Order("t", "up", 0.49, S - 30, S, size=10.0)], latency_ms=0)
+    assert r2.status == "filled" and r2.fill_reason == "queue" and math.isclose(r2.t_fill, S - 10)
+    # mise à jour du carnet APRÈS le message du trade (cas minoritaire) : même résultat
+    events3 = BASE + [ev_trade(-20, bk.UP, "SELL", 0.49, 60.0, "a"),
+                      ev_pc(-19.98, [(bk.UP, 0.49, 40.0, "B"), (bk.DOWN, 0.51, 40.0, "S")]),
+                      ev_trade(-10, bk.UP, "SELL", 0.49, 50.0, "b")]
+    (r3,) = mk.simulate(make_market(events3), [mk.Order("t", "up", 0.49, S - 30, S, size=10.0)], latency_ms=0)
+    assert r3.status == "filled" and r3.fill_reason == "queue" and math.isclose(r3.t_fill, S - 10)
 
 
 def test_orders_fair_value_capped_by_bbo():

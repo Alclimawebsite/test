@@ -623,8 +623,10 @@ def write_readme(ctx: dict, out: Path) -> None:
         "Un ordre au repos (achat de 10 parts de Up ou de Down à L) posé à t0 (+ 300 ms de latence) a devant lui la taille affichée à L à t0. "
         "La file ne dépasse jamais la taille affichée (les annulations devant nous la réduisent). Chaque trade preneur qui consomme ce niveau "
         "(`last_trade_price` du côté opposé, en tenant compte de la complémentarité : un achat preneur de Down à 1 − L consomme les bids Up à L) "
-        "sert d'abord la file, puis nous ; un trade au-delà du niveau (traversée) nous exécute entièrement ; si un ordre adverse entre dans notre "
-        "niveau (le carnet nous « croise »), il nous exécute. Un ordre qui croiserait le carnet dès la pose serait un ordre preneur : il est écarté "
+        "sert d'abord la file, puis nous ; un trade au-delà du niveau (traversée) nous exécute entièrement. La mise à jour du carnet d'un trade est émise "
+        "≈ 20 ms avant son message `last_trade_price` : la file consommée par un trade est mesurée avant les baisses de taille des 200 ms précédentes "
+        "(pas de double comptage), et un état croisé transitoire du carnet reconstruit (ordre agresseur visible un instant avant son appariement, "
+        "instantanés Up/Down désynchronisés) n'exécute rien : seul un trade preneur consomme le niveau. Un ordre qui croiserait le carnet dès la pose serait un ordre preneur : il est écarté "
         "(`crossing`) et compté à part. Annulation à t_cancel (exécution partielle conservée). Paiement à la résolution : 1{gagnant} − L par part, "
         "sans frais ; remise maker estimée à part (0,2 × frais preneur au même prix). Tests : `tests/test_polymarket_maker_live.py`.",
         "",
@@ -642,12 +644,12 @@ def write_readme(ctx: dict, out: Path) -> None:
         t = by_l.copy()
         t["stratégie"] = t["strategy"].map(STRAT_LABELS)
         cols = {"stratégie": "stratégie", "label": "config.", "n_orders": "ordres", "n_markets": "marchés", "n_crossing": "croisants (écartés)",
-                "fill_rate": "exécutés", "share_by_queue": "via la file", "share_by_traversal": "via traversée", "share_by_cross": "via croisement",
+                "fill_rate": "exécutés", "share_by_queue": "via la file", "share_by_traversal": "via traversée",
                 "q_ahead0_median": "file médiane", "delay_median_s": "délai médian (s)", "pnl_per_placed_c": "P&L / part placée (c)",
                 "pnl_per_placed_ic_lo": "IC bas", "pnl_per_placed_ic_hi": "IC haut", "pnl_per_executed_c": "P&L / part exécutée (c)",
                 "rebate_per_executed_c": "remise (c)", "win_rate_executed": "gain si exécuté", "win_rate_not_executed": "gain sinon"}
         t = t[[c for c in cols if c in t.columns]].rename(columns=cols)
-        lines += [to_markdown(t, {"exécutés": "0%", "via la file": "0%", "via traversée": "0%", "via croisement": "0%", "file médiane": 0, "délai médian (s)": 1,
+        lines += [to_markdown(t, {"exécutés": "0%", "via la file": "0%", "via traversée": "0%", "file médiane": 0, "délai médian (s)": 1,
                                   "P&L / part placée (c)": "+1", "IC bas": "+1", "IC haut": "+1", "P&L / part exécutée (c)": "+1", "remise (c)": 2,
                                   "gain si exécuté": "0%", "gain sinon": "0%"}), ""]
     if len(st.get("pairs", [])):
@@ -709,8 +711,8 @@ def write_readme(ctx: dict, out: Path) -> None:
         "",
         f"* **n = {n} marchés** sur une seule matinée UTC (régime de volatilité unique) ; {len(by_l)} configurations testées sans correction pour tests multiples ; "
         "la meilleure configuration est choisie a posteriori. À relancer après 24 h de collecte.",
-        "* File d'attente : borne supérieure (les annulations devant nous ne sont vues que si le niveau affiché passe sous notre file) ; exécution par "
-        "croisement supposée totale (optimiste si l'ordre adverse est plus petit que nous) ; le prix d'un `last_trade_price` est le niveau touché "
+        "* File d'attente : borne supérieure (les annulations devant nous ne sont vues que si le niveau affiché passe sous notre file) ; "
+        "le prix d'un `last_trade_price` est le niveau touché "
         "(prix moyen du preneur dans 93 % des cas) : une traversée est comptée à partir de ce prix.",
         "* Nos ordres n'influencent pas les autres participants (pas de réaction des makers concurrents, pas de retrait du preneur). La latence est fixée à 300 ms.",
         "* Signal (a) : bougies 1 s Binance closes à S−30 s ; le flux Chainlink retarde d'≈ 4 s sur Binance (diagnostic), non modélisé ; juste valeur (c) : "

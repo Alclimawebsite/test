@@ -15,6 +15,11 @@ Commandes
   origines après la fin de l'apprentissage de l'étude si besoin (pas de fuite).
 * ``predict`` : P(hausse) à 5 / 10 / 15 min depuis la dernière barre close, médiane et
   déciles prévus ; rappel de la licence non commerciale de TimesFM 3.0.
+* ``polymarket-signal`` : formule exacte P(Up) = Φ(m/s) appliquée **en direct** aux marchés
+  Polymarket « Up or Down » (en cours et suivant) : phase, TWAP partiel / K / moyenne finale
+  Binance 1 s, σ (Parkinson ou EWMA), carnet CLOB, espérance preneur de chaque côté et décision,
+  toutes les N secondes ; journal CSV optionnel complété par l'issue officielle (second passage).
+  **Simulation papier** : aucun ordre, aucune clé (voir :mod:`tradebot.polymarket_signal`).
 
 Chaque étape est chronométrée (journal + ``timings.csv`` / ``runs.csv``). Les fonctions
 ``run_*`` acceptent un ``loader`` (même signature que ``data.load_universe``) et un
@@ -924,6 +929,13 @@ def _positive_int(s: str) -> int:
     return v
 
 
+def _positive_float(s: str) -> float:
+    v = float(s)
+    if not v > 0:
+        raise argparse.ArgumentTypeError("nombre > 0 attendu")
+    return v
+
+
 def _frac(s: str) -> float:
     v = float(s)
     if not 0.0 < v < 1.0:
@@ -1020,6 +1032,28 @@ def build_parser() -> argparse.ArgumentParser:
                     help="jours chargés (défaut : 2 sans covariables, 10 avec)")
     sp.add_argument("--no-symmetric", action="store_true")
     sp.add_argument("--no-cache", action="store_true")
+
+    sp = sub.add_parser("polymarket-signal",
+                        help="formule P(Up) en direct sur Polymarket Up/Down (simulation papier)")
+    sp.add_argument("--asset", default="btc", choices=("btc", "eth", "sol", "xrp", "bnb", "doge"),
+                    help="actif (défaut : btc)")
+    sp.add_argument("--duration", default="5m", choices=("5m", "15m"), help="durée du marché (défaut : 5m)")
+    sp.add_argument("--interval", type=_positive_float, default=1.0,
+                    help="secondes entre deux passages (défaut : 1)")
+    sp.add_argument("--sigma", choices=("parkinson", "ewma"), default="parkinson",
+                    help="σ : Parkinson (hauts/bas 1 min) ou EWMA des rendements 1 s (défaut : parkinson)")
+    sp.add_argument("--min-edge", type=float, default=0.0,
+                    help="espérance minimale pour « acheter », en cents par part (défaut : 0)")
+    sp.add_argument("--basis-sd", type=float, default=0.5,
+                    help="erreur du proxy Binance -> Chainlink sur F − K, en pb (défaut : 0,5, calibrée "
+                         "sur BTC 04/09–13/09 ; 0 = formule pure)")
+    sp.add_argument("--once", action="store_true", help="un seul passage")
+    sp.add_argument("--max-seconds", type=_positive_float, default=None,
+                    help="arrêt après N secondes (défaut : jusqu'à Ctrl-C)")
+    sp.add_argument("--log", default=None, metavar="FICHIER.csv",
+                    help="journal CSV (une ligne par marché et par passage, issue ajoutée ensuite)")
+    sp.add_argument("--fill-outcomes", action="store_true",
+                    help="second passage seulement : ajouter l'issue officielle au journal --log et faire le bilan")
     return p
 
 
@@ -1039,6 +1073,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command in ("timesfm-backtest", "predict") and args.covariates != "none" \
             and args.backend != "timesfm3":
         parser.error("les covariables exigent --backend timesfm3")
+    if args.command == "polymarket-signal" and args.fill_outcomes and not args.log:
+        parser.error("--fill-outcomes exige --log")
+    if args.command == "polymarket-signal" and not args.basis_sd >= 0:
+        parser.error("--basis-sd doit être >= 0")
     try:
         if args.command == "fetch":
             summary = run_fetch(args.tickers, interval=args.interval, days=args.days,
@@ -1071,6 +1109,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                         transform=args.transform, days=args.days,
                         symmetric=not args.no_symmetric, max_covariates=args.max_covariates,
                         aggregate_path=args.aggregate, cache=not args.no_cache)
+        elif args.command == "polymarket-signal":
+            from .polymarket_signal import run_signal
+            try:
+                run_signal(args.asset, args.duration, interval=args.interval, sigma=args.sigma,
+                           once=args.once, log_path=args.log, min_edge=args.min_edge / 100.0,
+                           basis_sd=args.basis_sd / 1e4, max_seconds=args.max_seconds,
+                           fill_only=args.fill_outcomes)
+            except (OSError, RuntimeError, ValueError) as exc:  # réseau, API, données
+                raise CliError(f"polymarket-signal : {exc}") from exc
     except CliError as exc:
         log.error("%s", exc)
         return 2

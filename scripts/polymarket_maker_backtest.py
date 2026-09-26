@@ -134,6 +134,12 @@ def load_markets(args, rt: Runtime) -> tuple[pd.DataFrame, dict]:
     with rt("1b. prédictions modeles_vs_marche, σ TimesFM, priceToBeat"):
         mvm = pd.read_csv(MVM_CSV, usecols=["slug", "p_pre", "p_pre_age_s", "tw_gap30", "p_hgb_ind1s", "p_logit_tw", "sigma_1m"])
         M = M.merge(mvm, on="slug", how="left")
+        # milieu à S−60 s pour la règle du milieu de (b), posée à S−60 s (p_pre est le prix à S−30 s :
+        # l'utiliser à S−60 s serait un regard en avant de 30 s qui écarte surtout les ordres du côté
+        # vers lequel le carnet est parti, c'est-à-dire ceux qui auraient été exécutés à perte)
+        pre60 = pb.fetch_pre_open_prices(client, M, workers=8, offset_s=-mk.TWO_SIDED_PLACE_OFFSET_S)
+        M = M.merge(pre60.rename(columns={"p_pre": "p_pre60", "p_pre_age_s": "p_pre60_age_s"})[["slug", "p_pre60", "p_pre60_age_s"]],
+                    on="slug", how="left")
         if SIGMA_CSV.exists():
             sg = pd.read_csv(SIGMA_CSV, usecols=["slug", "sigma_timesfm_bp", "sigma_rv_bp", "amplitude_quantile_train", "quintile_train"])
             M = M.merge(sg, on="slug", how="left")
@@ -186,8 +192,10 @@ def fv_inputs(row, sec: np.ndarray, close: np.ndarray, sig_hl: dict[float, np.nd
     """Instants de cotation, spot et P(Up) par variante de σ pour un marché (NaN si TWAP60(S) absent)."""
     S, E, K = int(row["start_ts"]), int(row["end_ts"]), row["twap60_S"]
     tq = mk.quote_times(S, E)
-    idx = np.searchsorted(sec, tq)
-    ok = (idx < len(sec)) & (sec[np.minimum(idx, len(sec) - 1)] == tq)
+    # information close à tq : la bougie 1 s ouverte à tq − 1 (close à tq) ; la bougie ouverte à tq
+    # n'est close qu'à tq + 1 (la prendre serait un regard en avant d'une seconde)
+    idx = np.searchsorted(sec, tq - 1)
+    ok = (idx < len(sec)) & (sec[np.minimum(idx, len(sec) - 1)] == tq - 1)
     spot = np.where(ok, close[np.minimum(idx, len(sec) - 1)], np.nan)
     out = {"tq": tq, "spot": spot}
     if not np.isfinite(K) or K <= 0:
@@ -212,8 +220,8 @@ def fair_value_quality(M: pd.DataFrame, sec, close, sig_hl, rt: Runtime) -> tupl
                 continue
             S, E, K = int(r["start_ts"]), int(r["end_ts"]), r["twap60_S"]
             tq = mk.quote_times(S, E)
-            idx = np.searchsorted(sec, tq)
-            ok = (idx < len(sec)) & (sec[np.minimum(idx, len(sec) - 1)] == tq)
+            idx = np.searchsorted(sec, tq - 1)          # bougie ouverte à tq − 1, close à tq
+            ok = (idx < len(sec)) & (sec[np.minimum(idx, len(sec) - 1)] == tq - 1)
             if not ok.all():
                 continue
             spot = close[idx]
@@ -248,6 +256,7 @@ def fair_value_quality(M: pd.DataFrame, sec, close, sig_hl, rt: Runtime) -> tupl
 # ---------------------------------------------------------------------------
 def build_payload(row, mt: mk.MarketTrades, fv: dict, args) -> dict:
     return {"slug": row["slug"], "start_ts": int(row["start_ts"]), "end_ts": int(row["end_ts"]), "p_pre": float(row["p_pre"]),
+            "p_pre60": float(row["p_pre60"]) if "p_pre60" in row else float(row["p_pre"]),
             "y": float(row["y"]), "fee": {"rate": float(row["fee_rate"]), "exponent": float(row["fee_exponent"])},
             "size": float(args.size), "delay_s": float(args.delay), "lookback_s": float(args.lookback),
             "arrays": (mt.t, mt.price, mt.size, mt.cp_up, mt.cp_dn, mt.ap_up, mt.ap_dn), "fv": fv, "skip_fv": bool(args.skip_fv)}
@@ -266,7 +275,8 @@ def process_market(p: dict) -> dict:
                                      ("two_sided", mk.TWO_SIDED_PLACE_OFFSET_S, mk.TWO_SIDED_PRICES)):
         for side in ("up", "down"):
             for L in prices:
-                cross = mk._mid_crossing(side, L, p["p_pre"])
+                # règle du milieu avec le milieu connu à la pose : S−30 s pour (a), S−60 s pour (b)
+                cross = mk._mid_crossing(side, L, p["p_pre"] if strategy == "signal" else p.get("p_pre60", p["p_pre"]))
                 for qv in Q_VARIANTS:
                     q = mk.measured_q_ahead(side, L, "pre") if qv == "measured" else float(qv)
                     for rule in (0, 1):
@@ -845,7 +855,8 @@ def write_readme(ctx: dict, out: Path) -> None:
              f"dans [S−60 s, S) : {n_(ctx['med_pre']['5m'])} / {n_(ctx['med_pre']['15m'])} trades ; dans [S, S+60 s) : {n_(ctx['med_post']['5m'])} / {n_(ctx['med_post']['15m'])}.")
     L.append(f"* **Marchés** : `PolymarketClient.list_updown_markets` (cache), issue officielle `outcomePrices`, barème `feeSchedule` "
              f"({ctx['fee_desc']}) ; `priceToBeat`/`finalPrice` du cache `timesfm_amplitude/event_meta.parquet` ; prédictions par marché de "
-             f"`modeles_vs_marche/marches_predictions.csv` (`p_hgb_ind1s`, `p_logit_tw`, `tw_gap30`, prix Up à S−30 s `p_pre`) ; "
+             f"`modeles_vs_marche/marches_predictions.csv` (`p_hgb_ind1s`, `p_logit_tw`, `tw_gap30`, prix Up à S−30 s `p_pre`) et prix Up à S−60 s "
+             f"`p_pre60` (`prices-history`, pour la règle du milieu de (b)) ; "
              f"σ TimesFM et EWMA à S de `timesfm_amplitude/sigma_par_marche.csv` ({n_(ctx['n_sigma'])} marchés avec σ TimesFM).")
     L.append(f"* **Binance 1 s** (BTCUSDT, zips journaliers `data.binance.vision`, cache `data/cache/pm_maker/binance_1s/`) pour la juste valeur (c) ; "
              f"TWAP60(S) = moyenne des closes 1 s sur (S−60 s, S] (agrégats `pm_backtest/agg1s`). Écart de niveau log(TWAP60_Binance(S) / priceToBeat) : "
@@ -868,7 +879,7 @@ def write_readme(ctx: dict, out: Path) -> None:
              f"le bloc est dans [t0 + {ctx['args'].delay:.0f} s, t1 + {ctx['args'].delay:.0f} s). **Ordres croisants** (sans carnet historique) : un achat preneur de X à un "
              f"prix ≤ L (ou une vente preneur de Y à ≥ 1 − L) dans les {ctx['args'].lookback:.0f} s précédant la pose prouve que l'ask de X était ≤ L : l'ordre serait un "
              f"ordre preneur (frais, exécution immédiate) et il est écarté ; avant l'ouverture s'y ajoute la règle du milieu `prices-history` "
-             f"(L ≥ milieu_X + 0,005). **Résolution** : 1 $ par part si X gagne ; P&L par part = 1{{gagné}} − L, sans frais. **Remise maker** estimée à part : "
+             f"(L ≥ milieu_X + 0,005, milieu connu à la pose : S−30 s pour (a), S−60 s pour (b)). **Résolution** : 1 $ par part si X gagne ; P&L par part = 1{{gagné}} − L, sans frais. **Remise maker** estimée à part : "
              f"0,2 × frais preneur au prix L (≈ 0,35 c à 0,50), plafonnée à 20 % des frais preneurs du marché.\n")
     L.append("**File d'attente Q_ahead** (parts) : médiane de la taille affichée au niveau quand il est présent, mesurée sur le carnet réel "
              "(`reports/polymarket/maker_live/README.md` § 3, 18 marchés du 26/09) ; 0,47 non mesuré = valeur de 0,48 ; en cours de fenêtre (c) : 100 parts.\n")
@@ -885,7 +896,7 @@ def write_readme(ctx: dict, out: Path) -> None:
              f"Règle fixée d'avance : la configuration (modèle, L, annulation) au meilleur P&L par part placée sur la 1re moitié (≥ 200 ordres) est évaluée sur la 2e.")
     L.append("* **(b) deux côtés** : achat Up et achat Down au même prix (0,49 ou 0,48) posés à S−60 s, annulés à S ou S+30 s ; P&L par paire = écart capté "
              "(2 c à 0,49) si les deux sont exécutés, position directionnelle sinon.")
-    L.append(f"* **(c) juste valeur** : de S+30 s à E−60 s, toutes les 10 s, p̂ = Φ(d/σ_restant) avec d = log(spot Binance 1 s / TWAP60(S)) et "
+    L.append(f"* **(c) juste valeur** : de S+30 s à E−60 s, toutes les 10 s, p̂ = Φ(d/σ_restant) avec d = log(spot Binance 1 s / TWAP60(S)) (close de la bougie 1 s close à l'instant de cotation) et "
              f"var_restant = σ_1s² × ((E − 60 − t) + 20) ; bid Up à p̂ − 1 c et bid Down à (1 − p̂) − 1 c (cent inférieur, niveaux dans [0,05 ; 0,95]), ordre conservé "
              f"tant que le niveau ne change pas, sinon remplacé ; positions cumulées réglées à la résolution. σ : EWMA des rendements 1 s (demi-vie choisie sur la 1re "
              f"moitié parmi {{30, 60, 120, 300, 600, 1 200, 1 800, 3 600}} s par log-loss de p̂ contre l'issue : **{fr(ctx['hl'], 0)} s**), ou σ TimesFM prévu à S "
@@ -1212,7 +1223,7 @@ def main(argv=None) -> int:
                       "delays": plot_delays(delays, out / "delai_execution.png")}
 
     with rt("6. CSV et README"):
-        mcols = ["slug", "asset", "duration", "start_ts", "end_ts", "y", "p_pre", "p_pre_age_s", "tw_gap30", "p_hgb_ind1s", "p_logit_tw", "twap60_S",
+        mcols = ["slug", "asset", "duration", "start_ts", "end_ts", "y", "p_pre", "p_pre_age_s", "p_pre60", "p_pre60_age_s", "tw_gap30", "p_hgb_ind1s", "p_logit_tw", "twap60_S",
                  "price_to_beat", "final_price", "level_gap_bp", "move_bp", "sigma_timesfm_bp", "sigma_rv_bp", "quintile_train", "train", "slot",
                  "n_trades", "taker_shares", "taker_fees_total", "n_pre60", "shares_pre60", "n_post60", "shares_post60"] + [f"side_{m}" for m in MODELS]
         M[[c for c in mcols if c in M.columns]].to_csv(out / "marches.csv", index=False)

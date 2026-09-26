@@ -11,7 +11,9 @@ Modèle d'exécution d'un ordre au repos (achat de ``size`` parts du jeton ``sid
 * chaque trade preneur qui consomme ce niveau (``last_trade_price`` du côté opposé, en tenant
   compte de la complémentarité : un achat preneur de Down à ``1 − L`` consomme aussi les bids Up
   à ``L``) sert d'abord la file, puis nous ; un trade **au-delà** du niveau (traversée) nous
-  exécute entièrement (priorité prix) ;
+  exécute entièrement (priorité prix). La mise à jour du carnet d'un trade arrive **avant** son
+  message : la file consommée est mesurée avant les baisses de taille des 200 ms précédentes
+  (pas de double comptage) ; un état croisé transitoire du carnet reconstruit n'exécute rien ;
 * annulation à ``t_cancel`` (exécution partielle conservée) ; paiement à la résolution :
   ``1{gagnant} − L`` par part, sans frais ; **remise maker** estimée à part :
   ``rebate_rate × frais preneur au même prix`` (0,2 × 0,07 × p(1 − p) ≈ 0,35 c à 0,50).
@@ -58,6 +60,7 @@ log = logging.getLogger(__name__)
 MAKER_REBATE_RATE = 0.20
 DEFAULT_SIZE = 10.0           # parts par ordre (taille médiane des trades preneurs : 6 à 10)
 LATENCY_MS = 300              # décision -> ordre visible par le CLOB
+PRE_TRADE_MS = 200            # la mise à jour du carnet d'un trade précède son message last_trade_price
 SIGNAL_PRICES = (0.48, 0.49, 0.50)
 CANCEL_OFFSETS = (0, 30, 60)  # annulation à S, S+30 s, S+60 s
 BINANCE_1S_DIR = CACHE_DIR / "pm_maker_live" / "binance_1s"
@@ -104,7 +107,7 @@ class OrderResult:
     t_placed: float             # s (après latence) ; NaN si non posé
     t_fill: float               # première exécution (s) ; NaN sinon
     t_full: float               # exécution complète (s) ; NaN sinon
-    fill_reason: str            # "" | "queue" (trades au niveau) | "traversal" (trade au-delà) | "cross" (le carnet nous croise)
+    fill_reason: str            # "" | "queue" (trades au niveau) | "traversal" (trade au-delà)
     traded_at_level: float      # volume preneur passé au niveau pendant la vie de l'ordre
     mid_at_place: float
     q_ahead_end: float
@@ -118,13 +121,16 @@ class OrderResult:
 # Simulateur
 # ---------------------------------------------------------------------------
 class _Live:
-    __slots__ = ("o", "q0", "q", "filled", "t_placed", "t_fill", "t_full", "reason", "traded", "mid0", "level_int")
+    __slots__ = ("o", "q0", "q", "filled", "t_placed", "t_fill", "t_full", "reason", "traded", "mid0", "level_int",
+                 "qh", "last_trade_ts")
 
     def __init__(self, o: Order, q: float, t: float, mid: float):
         self.o, self.q0, self.q, self.filled, self.t_placed = o, q, q, 0.0, t
         self.t_fill = self.t_full = math.nan
         self.reason, self.traded, self.mid0 = "", 0.0, mid
         self.level_int = _p_int(o.up_level)
+        self.qh: list[tuple[float, float]] = []     # (ts, file AVANT une baisse due au carnet) récentes
+        self.last_trade_ts = -math.inf
 
     def fill_all(self, ts: float, reason: str) -> None:
         if self.filled == 0:
@@ -151,11 +157,21 @@ def _crosses(book: Book, up_side: str, level_int: int) -> bool:
 
 
 class MakerSimulator:
-    """Rejoue les événements d'un marché et exécute des ordres au repos virtuels."""
+    """Rejoue les événements d'un marché et exécute des ordres au repos virtuels.
 
-    def __init__(self, market: LiveMarket, latency_ms: int = LATENCY_MS):
+    Le serveur émet la mise à jour du carnet (``price_change`` / ``book``) **avant** le message
+    ``last_trade_price`` du même trade (≈ 20 ms avant, dans ≈ 95 % des cas). Pour ne pas compter
+    deux fois la consommation de la file (une fois par la baisse de la taille affichée, une fois par
+    le trade), un trade au niveau est imputé sur la file telle qu'elle était ``pre_ms`` avant son
+    horodatage (et après le trade précédent). Les états croisés transitoires du carnet reconstruit
+    (l'ordre agresseur apparaît un instant avant d'être apparié, ou instantanés Up/Down désynchronisés)
+    n'exécutent rien : seule l'arrivée d'un trade preneur consomme le niveau.
+    """
+
+    def __init__(self, market: LiveMarket, latency_ms: int = LATENCY_MS, pre_ms: int = PRE_TRADE_MS):
         self.market = market
         self.latency_s = latency_ms / 1000.0
+        self.pre_s = pre_ms / 1000.0
 
     def run(self, orders: Sequence[Order]) -> list[OrderResult]:
         if not orders:
@@ -202,21 +218,16 @@ class MakerSimulator:
             # 3) événement
             if kind in _KINDS_BOOK:
                 apply_event(book, ev)
-                if live:
-                    still = []
-                    for lv in live:
-                        if _crosses(book, lv.o.up_side, lv.level_int):
-                            # un ordre adverse est entré dans notre niveau : il nous exécute (nous étions là avant)
-                            lv.fill_all(ts, "cross")
-                            lv.t_full = ts
-                            finish(lv, "filled")
-                            continue
-                        levels = book.bids if lv.o.up_side == "bid" else book.asks
-                        shown = levels.get(lv.level_int, 0.0)
-                        if shown < lv.q:
-                            lv.q = shown
-                        still.append(lv)
-                    live = still
+                for lv in live:
+                    # la file ne dépasse jamais la taille affichée (annulations devant nous, ou le
+                    # trade dont le message arrive juste après : mémorisé pour ne pas le compter deux fois)
+                    levels = book.bids if lv.o.up_side == "bid" else book.asks
+                    shown = levels.get(lv.level_int, 0.0)
+                    if shown < lv.q:
+                        lv.qh.append((ts, lv.q))
+                        lv.q = shown
+                    while lv.qh and lv.qh[0][0] < ts - self.pre_s:
+                        lv.qh.pop(0)
             elif kind == "trade" and live:
                 price, size, side, _tx = ev[4]
                 cons, lvl = consumed_level(ev[3], side, price)
@@ -229,8 +240,17 @@ class MakerSimulator:
                     beyond = (lvl_int < lv.level_int) if cons == "bid" else (lvl_int > lv.level_int)
                     if lvl_int == lv.level_int:
                         lv.traded += size
-                        eat = min(size, lv.q)
-                        lv.q -= eat
+                        # file avant les baisses de taille des `pre_ms` précédentes (mise à jour du
+                        # carnet émise avant le message du trade), sans remonter avant le trade précédent
+                        q_pre = lv.q
+                        for t_h, q_h in reversed(lv.qh):
+                            if t_h < ts - self.pre_s or t_h < lv.last_trade_ts:
+                                break
+                            q_pre = q_h
+                        lv.qh.clear()
+                        lv.last_trade_ts = ts
+                        eat = min(size, q_pre)
+                        lv.q = min(lv.q, q_pre - eat)
                         rem = size - eat
                         if rem > 0:
                             take = min(rem, lv.o.size - lv.filled)
