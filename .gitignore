@@ -7,3 +7,4 @@ data/cache/
 .cache/
 *.parquet
 !reports/**/*.parquet
+logs/
