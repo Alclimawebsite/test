@@ -291,6 +291,20 @@ def test_pnl_by_margin_and_choice():
     assert pb.choose_margin(c2, min_trades=200) == 0.01
 
 
+def test_tick_half_spread_and_pnl_with_array_spread():
+    # milieu à un demi-pas -> écart d'un pas possible ; milieu sur un pas entier -> au moins 2 pas
+    hs = pb.tick_half_spread(np.array([0.505, 0.495, 0.500, 0.490, 0.485, np.nan]))
+    assert np.allclose(hs[:5], [0.005, 0.005, 0.01, 0.01, 0.005])
+    assert math.isnan(hs[5])
+    # carnet 0,49 / 0,51 (milieu 0,500) : on paie 0,51 pour Up et 0,51 pour Down
+    t = pb.taker_trades(np.array([0.9, 0.1]), np.array([0.5, 0.5]), np.array([1.0, 0.0]), 0.0,
+                        half_spread=pb.tick_half_spread(np.array([0.5, 0.5])))
+    assert t["price"][0] == pytest.approx(0.51) and t["price"][1] == pytest.approx(0.51)
+    assert t["fee"][0] == pytest.approx(round(0.07 * 0.51 * 0.49, 5))
+    c = pb.pnl_by_margin(np.array([0.9]), np.array([0.5]), np.array([1.0]), [0.0], half_spread=np.array([0.01]))
+    assert c["avg_cost"][0] == pytest.approx(0.51 + round(0.07 * 0.51 * 0.49, 5))
+
+
 # ---------------------------------------------------------------------------
 # 5. Métriques et bootstrap groupé
 # ---------------------------------------------------------------------------
@@ -317,6 +331,10 @@ def test_slot_bootstrap_ci_and_clusters():
     assert (hi - lo) / 2 > 1.8 * naive
     r = bs.ratio(np.ones(1200), np.full(1200, 2.0))
     assert r[0] == pytest.approx(0.5) and r[1] == pytest.approx(0.5)
+    # ratio_draws : mêmes tirages que ratio (IC percentile identique)
+    e2, draws = bs.ratio_draws(x)
+    assert e2 == pytest.approx(est) and len(draws) == 500
+    assert np.quantile(draws, [0.025, 0.975]) == pytest.approx([lo, hi])
 
 
 def test_prob_metrics_basic():

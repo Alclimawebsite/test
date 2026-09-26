@@ -26,6 +26,7 @@ import sys
 import threading
 import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -372,8 +373,11 @@ def run_timesfm(args, bars: dict, M: pd.DataFrame, rt: Runtime) -> tuple[pd.Data
     if args.timesfm <= 0:
         return pd.DataFrame(), info
     path = PB_CACHE / f"timesfm_{args.timesfm}_{args.start:%Y%m%d}_{args.end:%Y%m%d}.parquet"
+    info_path = path.with_suffix(".json")
     if path.exists() and not args.refit:
         df = pd.read_parquet(path)
+        if info_path.exists():
+            info.update(json.loads(info_path.read_text()))
         info.update(status="cache", n=int(df["p_timesfm"].notna().sum()))
         return df, info
     import torch
@@ -458,6 +462,7 @@ def run_timesfm(args, bars: dict, M: pd.DataFrame, rt: Runtime) -> tuple[pd.Data
     info.update(status="ok", n=int(df["p_timesfm"].notna().sum()), seconds=time.perf_counter() - t0,
                 backend=cfg.backend, context_len=ctx_len)
     record_cold("TimesFM", info["seconds"], f"{total} contextes, {args.threads} fils")
+    pm._atomic_write_text(info_path, json.dumps(info, default=str))
     pm._atomic_parquet(df, path)
     return df, info
 
@@ -582,11 +587,16 @@ def pnl_stage(M: pd.DataFrame, prob_models: list[str], signals: dict[str, np.nda
             })
         return rows
 
-    for mode in ("taker", "maker"):
+    # « taker_tick » : ask au demi-écart MINIMAL compatible avec le pas de 0,01 (un milieu sur un
+    # cent entier, 0,500, impose un carnet d'au moins 0,49 / 0,51 -> ask = milieu + 0,01)
+    hs_tick = pb.tick_half_spread(pmk)
+    for mode in ("taker", "maker", "taker_tick"):
+        kind = "maker" if mode == "maker" else "taker"
+        hs = hs_tick if mode == "taker_tick" else pb.HALF_SPREAD
         for m in prob_models:
             p = M[f"p_{m}"].to_numpy(dtype="float64")
             for scope, sm in (("1re moitié (validation)", val), ("2e moitié (test final)", tst)):
-                c = pb.pnl_by_margin(p, pmk, y, MARGINS, fr, fe, mode=mode, mask=sm & np.isfinite(p))
+                c = pb.pnl_by_margin(p, pmk, y, MARGINS, fr, fe, mode=kind, mask=sm & np.isfinite(p), half_spread=hs)
                 c.insert(0, "échantillon", scope)
                 c.insert(0, "mode", mode)
                 c.insert(0, "modèle", m)
@@ -597,14 +607,14 @@ def pnl_stage(M: pd.DataFrame, prob_models: list[str], signals: dict[str, np.nda
                 summ.append({"modèle": m, "mode": mode, "marge": math.nan, "marge_choisie_sur": "aucune (< min trades)",
                              "échantillon": "2e moitié (test final)", "n_trades": 0, "pnl_total_usd": 0.0})
                 continue
-            t = (pb.taker_trades(p, pmk, y, mg, fr, fe) if mode == "taker" else pb.maker_trades(p, pmk, y, mg))
+            t = (pb.taker_trades(p, pmk, y, mg, fr, fe, hs) if kind == "taker" else pb.maker_trades(p, pmk, y, mg))
             t.loc[~np.isfinite(p), ["side", "pnl"]] = [0, np.nan]
             summ += summarize(m, mode, mg, t, "1re moitié")
             trades[(m, mode)] = t
         # baselines : on achète toujours le côté prédit (pas de marge)
         for k, s in signals.items():
             p = np.where(np.isfinite(s), (s >= 0).astype(float), np.nan)
-            t = (pb.taker_trades(p, pmk, y, -1.0, fr, fe) if mode == "taker" else pb.maker_trades(p, pmk, y, -1.0))
+            t = (pb.taker_trades(p, pmk, y, -1.0, fr, fe, hs) if kind == "taker" else pb.maker_trades(p, pmk, y, -1.0))
             summ += summarize(k, mode, math.nan, t, "— (toujours en position)")
             trades[(k, mode)] = t
     return {"curves": pd.concat(curves, ignore_index=True), "summary": pd.DataFrame(summ), "trades": trades}
@@ -629,6 +639,167 @@ def pnl_cells(M: pd.DataFrame, trades: dict, names: list[str], boot: pb.SlotBoot
                          "pnl_total_usd": float(np.nansum(pnl[ok])), "pnl_par_part": per[0],
                          "ic_bas": per[1], "ic_haut": per[2]})
     return pd.DataFrame(rows)
+
+
+DIAG_TRADES = REPORTS_DIR / "polymarket" / "trades_windows.csv"   # diagnostic § 6 bis (600 marchés)
+SUBWIN_PATH = PB_CACHE / "trades_subwindows.parquet"
+SUBWINDOWS = {"w10": (-30, -20), "w30": (-30, 0)}                  # secondes relatives à S
+
+
+def fetch_trade_subwindows(mk: pd.DataFrame, workers: int = 8, max_rps: float = 12.0) -> pd.DataFrame:
+    """Prix payés par les preneurs par côté dans des sous-fenêtres après S − 30 s (``SUBWINDOWS``)
+    pour les marchés du sous-échantillon du diagnostic. Lecture seule (``/trades`` public) ; même
+    convention que le diagnostic : BUY X au prix p -> côté X payé p ; SELL X -> côté opposé 1 − p.
+    Cache : ``data/cache/pm_backtest/trades_subwindows.parquet``."""
+    T = pd.read_csv(DIAG_TRADES, usecols=["slug"])
+    sub = mk[mk["slug"].isin(set(T["slug"]))][["slug", "condition_id", "start_ts"]]
+    client = pm.PolymarketClient(max_rps=max_rps, use_cache=False, timeout=20.0, retries=4)
+
+    def one(rec) -> dict:
+        slug, cond, S = rec
+        row: dict = {"slug": slug}
+        try:
+            tr = client.trades(cond, limit=50_000)
+        except pm.PolymarketError as exc:
+            log.warning("trades %s : %s", slug, exc)
+            return row
+        if tr.empty:
+            return row
+        t = pb.to_unix(tr["time"]) - int(S)
+        buy = tr["side"].astype(str).str.upper().eq("BUY").to_numpy()
+        up = tr["outcome"].astype(str).str.lower().eq("up").to_numpy()
+        price, size = tr["price"].to_numpy(dtype=float), tr["size"].to_numpy(dtype=float)
+        exp_up, cost = np.where(buy, up, ~up), np.where(buy, price, 1 - price)
+        for w, (a, b) in SUBWINDOWS.items():
+            m = (t >= a) & (t < b)
+            for side, sel in (("up", exp_up), ("down", ~exp_up)):
+                mm = m & sel
+                row[f"{w}_{side}_vwap"] = float((cost[mm] * size[mm]).sum() / size[mm].sum()) if mm.any() else math.nan
+        return row
+
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        df = pd.DataFrame(list(ex.map(one, zip(sub["slug"], sub["condition_id"], sub["start_ts"]))))
+    PB_CACHE.mkdir(parents=True, exist_ok=True)
+    pm._atomic_parquet(df, SUBWIN_PATH)
+    return df
+
+
+def execution_check(M: pd.DataFrame, trades: dict, names: list[str], B: int, seed: int) -> pd.DataFrame:
+    """Surcoût d'exécution mesuré sur les positions de CHAQUE modèle (et non plus seulement de
+    ``gap_m30``) : sur le sous-échantillon du diagnostic (``trades_windows.csv``, 600 marchés
+    tirés au hasard du 18 au 24/09), prix moyen réellement payé par les preneurs du côté choisi
+    dans [S − 30 s, S) contre l'ask supposé (milieu + 0,005), et P&L à ce prix payé (frais
+    inclus). Vide si le fichier du diagnostic est absent."""
+    if not DIAG_TRADES.exists():
+        log.warning("%s absent : pas de contrôle d'exécution par modèle", DIAG_TRADES)
+        return pd.DataFrame()
+    T = pd.read_csv(DIAG_TRADES, usecols=["slug", "pre30_up_vwap", "pre30_down_vwap"])
+    J = pd.DataFrame({"i": np.arange(len(M)), "slug": M["slug"].to_numpy()}).merge(T, on="slug")
+    if J.empty:
+        return pd.DataFrame()
+    i = J["i"].to_numpy()
+    boot = pb.SlotBootstrap(M["slot"].to_numpy()[i], B=B, seed=seed)
+    fr, fe = M["fee_rate"].to_numpy(dtype="float64")[i], M["fee_exponent"].to_numpy(dtype="float64")[i]
+    up_v, dn_v = J["pre30_up_vwap"].to_numpy(dtype="float64"), J["pre30_down_vwap"].to_numpy(dtype="float64")
+    days = pd.to_datetime(M["start_ts"].to_numpy()[i], unit="s", utc=True)
+    # sous-fenêtre [S − 30 s, S − 20 s) (cache de fetch_trade_subwindows, optionnel) : le surcoût
+    # ne doit pas venir seulement des transactions tardives de [S − 30 s, S)
+    w10 = None
+    if SUBWIN_PATH.exists():
+        W = pd.read_parquet(SUBWIN_PATH)
+        if {"w10_up_vwap", "w10_down_vwap"} <= set(W.columns):
+            W = J[["slug"]].merge(W, on="slug", how="left")
+            w10 = (W["w10_up_vwap"].to_numpy(dtype="float64"), W["w10_down_vwap"].to_numpy(dtype="float64"))
+    rows = []
+    for name in names:
+        t = trades.get((name, "taker"))
+        if t is None:
+            continue
+        side = t["side"].to_numpy()[i]
+        paid = np.where(side > 0, up_v, np.where(side < 0, dn_v, np.nan))
+        ok = (side != 0) & np.isfinite(paid)
+        n = int(ok.sum())
+        if n == 0:
+            continue
+        surc = boot.mean(paid - t["price"].to_numpy()[i], ok)
+        pnl_paid = t["win"].to_numpy()[i] - paid - pb._fee_per_share(paid, fr, fe)
+        pp = boot.mean(pnl_paid, ok)
+        pa = boot.mean(t["pnl"].to_numpy()[i], ok)
+        extra = {}
+        if w10 is not None:
+            paid10 = np.where(side > 0, w10[0], np.where(side < 0, w10[1], np.nan))
+            ok10 = (side != 0) & np.isfinite(paid10)
+            if ok10.any():
+                s10 = boot.mean(paid10 - t["price"].to_numpy()[i], ok10)
+                extra = {"n_avec_transaction_10s": int(ok10.sum()), "surcoût_10s": s10[0],
+                         "surcoût_10s_ic_bas": s10[1], "surcoût_10s_ic_haut": s10[2]}
+        rows.append({"modèle": name, "n_marchés_échantillon": len(J), "n_positions": int((side != 0).sum()),
+                     "n_avec_transaction": n, "prix_supposé_moyen": float(np.mean(t["price"].to_numpy()[i][ok])),
+                     "prix_payé_moyen": float(np.mean(paid[ok])),
+                     "surcoût": surc[0], "surcoût_ic_bas": surc[1], "surcoût_ic_haut": surc[2],
+                     "pnl_par_part_ask_supposé": pa[0], "pnl_par_part_prix_payé": pp[0],
+                     "pnl_prix_payé_ic_bas": pp[1], "pnl_prix_payé_ic_haut": pp[2],
+                     "période": f"{days.min():%d/%m}–{days.max():%d/%m}", **extra})
+    return pd.DataFrame(rows)
+
+
+def robustness_table(M: pd.DataFrame, pnl: dict, exe: pd.DataFrame, boot: pb.SlotBootstrap, mid_ts: int,
+                     names: list[str], B: int, seed: int) -> pd.DataFrame:
+    """P&L preneur par part (2e moitié) de chaque modèle : IC groupé par créneau de 15 min
+    (référence), IC par blocs d'un JOUR, IC SIMULTANÉ sur les ``names`` (bande max-|t|, mêmes
+    tirages : correction pour tests multiples), ask cohérent avec le pas de 0,01 (marge
+    re-choisie sur la 1re moitié) et P&L après le surcoût mesuré sur les positions du modèle."""
+    tst = (M["start_ts"] >= mid_ts).to_numpy()
+    day = pd.to_datetime(M["start_ts"], unit="s", utc=True).dt.floor("D").to_numpy()
+    boot_day = pb.SlotBootstrap(day, B=B, seed=seed)
+    summ = pnl["summary"]
+    tick = summ[(summ["mode"] == "taker_tick") & (summ["échantillon"] == "2e moitié (test final)")].set_index("modèle")
+    ref = summ[(summ["mode"] == "taker") & (summ["échantillon"] == "2e moitié (test final)")].set_index("modèle")
+    ex = exe.set_index("modèle") if len(exe) else pd.DataFrame()
+    rows, draws = [], {}
+    for name in names:
+        t = pnl["trades"].get((name, "taker"))
+        if t is None:
+            continue
+        v = t["pnl"].to_numpy()
+        ok = tst & np.isfinite(v)
+        tr = (t["side"].to_numpy() != 0) & ok
+        if not tr.any():
+            continue
+        est, d = boot.ratio_draws(np.where(ok, v, np.nan), tr.astype(float), ok)
+        draws[name] = (est, d[np.isfinite(d)])
+        dd = boot_day.ratio(np.where(ok, v, np.nan), tr.astype(float), ok)
+        lo, hi = np.quantile(d[np.isfinite(d)], [0.025, 0.975])
+        r = {"modèle": name, "marge": ref.loc[name, "marge"] if name in ref.index else math.nan,
+             "n_positions": int(tr.sum()), "pnl_par_part": est, "ic_bas": lo, "ic_haut": hi,
+             "ic_jour_bas": dd[1], "ic_jour_haut": dd[2]}
+        if name in tick.index and np.isfinite(tick.loc[name].get("pnl_par_part", np.nan)):
+            rt_ = tick.loc[name]
+            r.update({"tick_marge": rt_["marge"], "tick_n_positions": rt_["n_trades"], "tick_pnl_par_part": rt_["pnl_par_part"],
+                      "tick_ic_bas": rt_["pnl_par_part_ic_bas"], "tick_ic_haut": rt_["pnl_par_part_ic_haut"]})
+        if len(ex) and name in ex.index:
+            e = ex.loc[name]
+            # P&L − surcoût mesuré du modèle ; IC : approximation normale des deux incertitudes
+            se_p = (hi - lo) / (2 * 1.96)
+            se_s = (e["surcoût_ic_haut"] - e["surcoût_ic_bas"]) / (2 * 1.96)
+            adj = est - e["surcoût"]
+            r.update({"surcoût_mesuré": e["surcoût"], "surcoût_ic_bas": e["surcoût_ic_bas"],
+                      "surcoût_ic_haut": e["surcoût_ic_haut"], "surcoût_n": e["n_avec_transaction"],
+                      "pnl_après_surcoût": adj, "pnl_après_surcoût_ic_bas": adj - 1.96 * math.hypot(se_p, se_s),
+                      "pnl_après_surcoût_ic_haut": adj + 1.96 * math.hypot(se_p, se_s)})
+        rows.append(r)
+    out = pd.DataFrame(rows)
+    if len(draws) > 1:
+        # bande simultanée : quantile 95 % du max_k |t_k| sur les mêmes tirages
+        k = list(draws)
+        L = min(len(draws[n][1]) for n in k)
+        z = np.column_stack([np.abs(draws[n][1][:L] - draws[n][0]) / np.std(draws[n][1][:L]) for n in k])
+        q = float(np.quantile(z.max(axis=1), 0.95))
+        se = {n: float(np.std(draws[n][1])) for n in k}
+        out["q_simultané"] = q
+        out["ic_simultané_bas"] = [r["pnl_par_part"] - q * se[r["modèle"]] for _, r in out.iterrows()]
+        out["ic_simultané_haut"] = [r["pnl_par_part"] + q * se[r["modèle"]] for _, r in out.iterrows()]
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -688,9 +859,14 @@ def plot_accuracy_brier(ev: pd.DataFrame, models: list[str], signals: list[str],
     probs = [m for m in models if m in e.index]
     best = e.loc[probs, "d_brier_vs_marché"].idxmin()
     bb = e.loc[best]
+    acc_ok = [m for m in probs if e.loc[m, "d_justesse_ic_bas"] > 0]
     if bb["d_brier_ic_haut"] < 0:
         title = (f"{label(best)} prévoit un peu mieux que le prix du marché à S−30 s "
                  f"(Brier −{fr_num(-1e3 * bb['d_brier_vs_marché'], 1)} ×10⁻³), mais l'écart reste minuscule")
+    elif acc_ok:
+        lo_, hi_ = (100 * e.loc[acc_ok, "d_justesse_vs_marché"].min(), 100 * e.loc[acc_ok, "d_justesse_vs_marché"].max())
+        title = (f"{len(acc_ok)} modèles sur {len(probs)} devinent le sens un peu mieux que le marché à S−30 s "
+                 f"(+{fr_num(lo_, 1)} à +{fr_num(hi_, 1)} point), sans probabilités significativement meilleures (Brier)")
     else:
         title = "Aucun modèle ne prévoit nettement mieux que le prix du marché à S−30 s"
     sub = (f"Issue officielle Polymarket, {fr_num(n_markets, 0)} marchés BTC/ETH/SOL 5m+15m du {PERIOD['all']} "
@@ -758,9 +934,13 @@ def plot_pnl_margin(curves: pd.DataFrame, summ: pd.DataFrame, names: list[str], 
     mg = chosen.loc[best, "marge"] if best in chosen.index else math.nan
     pnl_te = chosen.loc[best, "pnl_total_usd"] if best in chosen.index else math.nan
     if np.isfinite(mg):
+        r = chosen.loc[best]
         verb = "gagne" if pnl_te > 0 else "perd"
-        title = (f"La marge choisie sur la 1re moitié ({fr_num(100 * mg, 2)} c) : {label(best)} {verb} "
-                 f"{fr_num(abs(pnl_te), 1)} $ sur la 2e moitié (1 part par marché)")
+        sig = ("non significatif" if r["pnl_par_part_ic_bas"] <= 0 <= r["pnl_par_part_ic_haut"]
+               else "IC hors de 0")
+        title = (f"Marge choisie sur la 1re moitié ({fr_num(100 * mg, 2)} c) : {label(best)} {verb} "
+                 f"{fr_num(abs(pnl_te), 1)} $ sur la 2e moitié, soit {cents(r['pnl_par_part'])} par part "
+                 f"(IC {cents(r['pnl_par_part_ic_bas'])} ; {cents(r['pnl_par_part_ic_haut'])}) : {sig}")
     else:
         title = f"{label(best)} : aucune marge ne garde assez de positions"
     sub = ("P&L total en $ pour 1 part par marché, preneur au prix ask ≈ milieu(S−30 s) + 0,005, frais crypto_fees_v2 "
@@ -798,39 +978,49 @@ def plot_pnl_margin(curves: pd.DataFrame, summ: pd.DataFrame, names: list[str], 
     for (v, m, x, col), yv in zip(ends, pos):
         ax.annotate(short(m), xy=(x, v), xytext=(x + 0.6, yv), fontsize=8.5, color=TEXT, va="center", ha="left",
                     annotation_clip=False, arrowprops=dict(arrowstyle="-", color=col, lw=1.2))
-    from matplotlib.lines import Line2D
-
-    handles = [Line2D([], [], color=col, lw=2) for _, _, _, col in ends]
-    leg = axes[0].legend(handles, [short(m) for _, m, _, _ in ends], loc="lower left", frameon=True, fontsize=8,
-                         facecolor=BG, edgecolor=BG, framealpha=0.9)
-    for txt in leg.get_texts():
-        txt.set_color(TEXT)
+    # pas de légende : les étiquettes directes du panneau de droite (mêmes couleurs) suffisent, et une
+    # légende dans le panneau de gauche masquait soit la ligne 0, soit la courbe du modèle retenu
     _save(fig, path)
     return title
 
 
-def plot_cum_pnl(M: pd.DataFrame, trades: dict, best: str, mid_ts: int, path: Path, maker_ok: bool) -> str:
+def plot_cum_pnl(M: pd.DataFrame, trades: dict, best: str, mid_ts: int, path: Path,
+                 surcharge: float | None = None) -> str:
+    """P&L cumulé de la 2e moitié. ``surcharge`` : surcoût d'exécution mesuré sur les positions
+    du modèle (``execution_check``) -> courbe pointillée « preneur, prix réellement payé ».
+    La borne maker n'est plus tracée : la baseline ``gap_m30`` y fait autant que le modèle
+    (elle mesure le spread capté, pas le modèle) et la courbe suggérait le contraire."""
     from tradebot.report import BG, TEXT, TEXT_2, _draw_header, _header, _pyplot, _save, _style_axes
 
     plt = _pyplot()
     tst = (M["start_ts"] >= mid_ts).to_numpy()
     order = np.argsort(M["start_ts"].to_numpy()[tst], kind="stable")
     times = pd.to_datetime(M["start_ts"].to_numpy()[tst][order], unit="s", utc=True)
-    series = [(best, "taker", C_BLUE, "-", f"{short(best)} (preneur)")]
-    if maker_ok:
-        series.append((best, "maker", C_BLUE, "--", f"{short(best)}, maker optimiste"))
+    series = [(best, "taker", C_BLUE, "-", f"{short(best)} (preneur, ask supposé)")]
+    has_surc = surcharge is not None and np.isfinite(surcharge) and (best, "taker") in trades
+    if has_surc:
+        series.append((best, "surc", C_BLUE, "--", f"{short(best)}, surcoût mesuré {cents(surcharge)}"))
     series += [(k, "taker", BASELINE_COLORS[k], "-", short(k)) for k in BASELINE_COLORS]
     finals = {}
     W = 11.0
     t_best = trades.get((best, "taker"))
     fin_best = float(np.nansum(t_best["pnl"].to_numpy()[tst])) if t_best is not None else math.nan
+    fin_surc = (fin_best - surcharge * float((t_best["side"].to_numpy()[tst] != 0).sum())) if has_surc else math.nan
     base_fin = {k: float(np.nansum(trades[(k, "taker")]["pnl"].to_numpy()[tst])) for k in BASELINE_COLORS if (k, "taker") in trades}
     worst = min(base_fin, key=base_fin.get) if base_fin else None
-    title = (f"Test final ({PERIOD['h2']}) : {label(best)} finit à {fr_num(fin_best, 1, signed=True)} $ ; "
-             f"les baselines toujours en position perdent jusqu'à {fr_num(-base_fin[worst], 0)} $") if worst else "P&L cumulé"
+    if worst and has_surc:
+        title = (f"Test final ({PERIOD['h2']}) : {label(best)} finit à {fr_num(fin_best, 0, signed=True)} $ au prix supposé, "
+                 f"mais à {fr_num(fin_surc, 0, signed=True)} $ avec le surcoût mesuré sur ses positions ; "
+                 f"les baselines toujours en position perdent jusqu'à {fr_num(-base_fin[worst], 0)} $")
+    elif worst:
+        title = (f"Test final ({PERIOD['h2']}) : {label(best)} finit à {fr_num(fin_best, 1, signed=True)} $ ; "
+                 f"les baselines toujours en position perdent jusqu'à {fr_num(-base_fin[worst], 0)} $")
+    else:
+        title = "P&L cumulé"
     sub = ("P&L cumulé ($) pour 1 part par marché, 2e moitié de la période, preneur au prix ask ≈ milieu(S−30 s) + 0,005, "
            "frais inclus. Les baselines achètent le côté prédit à chaque marché ; le modèle ne prend position que si son "
-           "avantage estimé dépasse la marge. Pointillés : exécution maker supposée certaine (borne haute).")
+           "avantage estimé dépasse la marge. Pointillés : même P&L diminué, à chaque position, du surcoût réellement payé "
+           "par les preneurs du côté choisi dans [S−30 s, S) (sous-échantillon du diagnostic, 18–24/09).")
     t, s, hh = _header(W, title, sub)
     H = hh + 4.4
     fig, ax = plt.subplots(figsize=(W, H), facecolor=BG)
@@ -840,10 +1030,12 @@ def plot_cum_pnl(M: pd.DataFrame, trades: dict, best: str, mid_ts: int, path: Pa
     ax.axhline(0, color=TEXT_2, lw=0.8)
     ends = []
     for name, mode, col, ls, lab in series:
-        tt = trades.get((name, mode))
+        tt = trades.get((name, "taker" if mode == "surc" else mode))
         if tt is None:
             continue
         pnl = np.nan_to_num(tt["pnl"].to_numpy()[tst][order])
+        if mode == "surc":
+            pnl = pnl - surcharge * (tt["side"].to_numpy()[tst][order] != 0)
         cum = np.cumsum(pnl)
         ax.plot(times, cum, color=col, lw=2, ls=ls, zorder=3)
         ends.append([cum[-1], lab, col, ls])
@@ -855,12 +1047,7 @@ def plot_cum_pnl(M: pd.DataFrame, trades: dict, best: str, mid_ts: int, path: Pa
         ax.annotate(f"{lab} : {fr_num(v, 1, signed=True)} $", xy=(times[-1], v), xytext=(times[-1] + pd.Timedelta(hours=10), yv),
                     fontsize=8.5, color=TEXT, va="center", ha="left", annotation_clip=False,
                     arrowprops=dict(arrowstyle="-", color=col, lw=1.2))
-    from matplotlib.lines import Line2D
-
-    leg = ax.legend([Line2D([], [], color=col, lw=2, ls=ls) for _, _, col, ls in ends], [e[1] for e in ends],
-                    loc="lower left", frameon=True, fontsize=8, facecolor=BG, edgecolor=BG, framealpha=0.9)
-    for txt in leg.get_texts():
-        txt.set_color(TEXT)
+    # pas de légende : étiquettes directes à droite (la légende masquait le début des courbes)
     import matplotlib.dates as mdates
 
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%d/%m"))
@@ -925,6 +1112,9 @@ def write_outputs(ctx: dict) -> None:
     pnl["summary"].to_csv(out / "pnl_resume.csv", index=False, float_format="%.6g")
     ctx["cellp"].to_csv(out / "pnl_par_cellule.csv", index=False, float_format="%.6g")
     ctx["train_info"].to_csv(out / "apprentissage.csv", index=False, float_format="%.6g")
+    if len(ctx["exe"]):
+        ctx["exe"].to_csv(out / "controle_execution.csv", index=False, float_format="%.6g")
+    ctx["robust"].to_csv(out / "robustesse_pnl.csv", index=False, float_format="%.6g")
     # P&L cumulé journalier (2e moitié)
     tst = (M["start_ts"] >= ctx["mid_ts"]).to_numpy()
     day = pd.to_datetime(M["start_ts"], unit="s", utc=True).dt.floor("D").to_numpy()[tst]
@@ -943,51 +1133,95 @@ def write_outputs(ctx: dict) -> None:
     best = ctx["best_pnl"]
     names = [best] + [m for m in top if m != best][:2] + ["stack"]
     titles["margin"] = plot_pnl_margin(pnl["curves"], summ, names, out / "pnl_vs_marge.png")
-    maker_ok = (best, "maker") in pnl["trades"]
-    titles["cum"] = plot_cum_pnl(M, pnl["trades"], best, ctx["mid_ts"], out / "pnl_cumule_test.png", maker_ok)
+    exe = ctx["exe"]
+    surc = (float(exe.set_index("modèle").loc[best, "surcoût"]) if len(exe) and best in set(exe["modèle"]) else None)
+    titles["cum"] = plot_cum_pnl(M, pnl["trades"], best, ctx["mid_ts"], out / "pnl_cumule_test.png", surc)
     titles["calib"] = plot_calibration(ctx["calib"], ctx["best_ll"], out / "calibration.png")
     ctx["titles"] = titles
 
 
 def make_verdict(ctx: dict) -> str:
-    """Verdict en une phrase, choisi à partir des IC (P&L hors échantillon et Brier)."""
-    summ, ev = ctx["pnl"]["summary"], ctx["ev"]
-    best = ctx["best_pnl"]
-    r = summ[(summ["modèle"] == best) & (summ["mode"] == "taker") & (summ["échantillon"] == "2e moitié (test final)")]
-    e = ev[(ev["échantillon"] == "période complète") & (ev["cellule"] == "Tous")].set_index("modèle")
-    probs = [m for m in ctx["models"] if m in e.index]
-    better = [m for m in probs if e.loc[m, "d_brier_ic_haut"] < 0]
-    txt = ""
-    if len(r) and np.isfinite(r.iloc[0].get("pnl_par_part_ic_bas", np.nan)) and r.iloc[0]["pnl_par_part_ic_bas"] > 0:
-        rr = r.iloc[0]
-        txt = (f"`{best}` est rentable sur la 2e moitié ({cents(rr['pnl_par_part'])} par part, IC > 0, "
-               f"{fr_num(rr['n_trades'], 0)} positions), mais avec un prix d'exécution optimiste : il faut le confirmer en "
-               "papier sur le carnet réel avant toute conclusion.")
+    """Verdict calculé à partir des IC (P&L hors échantillon, avec et sans surcoût d'exécution, et Brier)."""
+    ev = ctx["ev"]
+    best, best_ll = ctx["best_pnl"], ctx["best_ll"]
+    e_all = ev[(ev["cellule"] == "Tous") & (((ev["échantillon"] == "période complète") & (ev["modèle"] != "stack"))
+                                            | ((ev["échantillon"] == "2e moitié (test final)") & (ev["modèle"] == "stack")))]
+    brier_better = [m for m, hi in zip(e_all["modèle"], e_all.get("d_brier_ic_haut", pd.Series(dtype=float)))
+                    if m != "market" and np.isfinite(hi) and hi < 0]
+    if not brier_better:
+        brier_txt = "En probabilité (Brier), aucun modèle ne fait significativement mieux que le marché."
     else:
-        txt = ("rien ne bat le marché de façon exploitable après frais, hors échantillon. ")
-        if better:
-            txt += (f"En probabilité, {', '.join('`' + m + '`' for m in better)} font significativement mieux que le prix "
-                    "à S−30 s (Brier), mais l'écart est de l'ordre de 10⁻³ : il ne couvre pas le coût d'entrée (ask ≈ 0,505 + "
-                    "frais 0,0175, soit un seuil ≈ 52,3 %). ")
-        txt += ("Le peu d'information disponible à S−30 s vient du TWAP partiel 1s (mécanique de la règle TWAP), pas des "
-                "indicateurs 1m.")
-    return txt
+        brier_txt = (f"En probabilité (Brier), seul{'s' if len(brier_better) > 1 else ''} "
+                     f"{', '.join('`' + m + '`' for m in brier_better)} fai{'sent' if len(brier_better) > 1 else 't'} "
+                     "significativement mieux que le marché, et de très peu (≈ 10⁻³).")
+    rob = ctx["robust"].set_index("modèle") if len(ctx["robust"]) else pd.DataFrame()
+    cand = [m for m in ctx["models"] + ["stack"] if m in rob.index]
+    def q(xs):
+        xs = ["`" + m + "`" for m in xs]
+        return xs[0] if len(xs) == 1 else ", ".join(xs[:-1]) + " et " + xs[-1]
+    sig = [m for m in cand if rob.loc[m, "ic_bas"] > 0]
+    sig_sim = [m for m in cand if rob.loc[m].get("ic_simultané_bas", -1) > 0]
+    has_surc = "pnl_après_surcoût" in rob.columns and rob["pnl_après_surcoût"].notna().any()
+    sig_cost = [m for m in cand if has_surc and rob.loc[m].get("pnl_après_surcoût_ic_bas", -1) > 0]
+    rb = rob.loc[best] if best in rob.index else None
+    rl = rob.loc[best_ll] if best_ll in rob.index else None
+    if rb is not None and has_surc and rb.get("pnl_après_surcoût_ic_bas", -1) > 0 and rb.get("ic_simultané_bas", -1) > 0:
+        return (f"`{best}` reste rentable sur la 2e moitié même avec le surcoût d'exécution mesuré sur ses positions "
+                f"({cents(rb['pnl_après_surcoût'])} par part, IC > 0) : à confirmer en papier sur le carnet réel.")
+    txt = []
+    if sig:
+        vals = [rob.loc[m, "pnl_par_part"] for m in sig]
+        txt.append(f"avec l'hypothèse d'exécution optimiste (ask = milieu + 0,005), {len(sig)} modèles sur {len(cand)} "
+                   f"({q(sig)}) gagnent de {cents(min(vals))} à {cents(max(vals))} par part sur la 2e moitié avec un IC qui "
+                   f"exclut 0, mais après correction pour {len(cand)} comparaisons (IC simultanés), "
+                   + (f"seuls {q(sig_sim)} l'excluent encore, de justesse" if sig_sim else "aucun ne l'exclut plus"))
+    else:
+        txt.append("aucun modèle n'a un P&L significativement positif sur la 2e moitié, même avec l'hypothèse d'exécution optimiste")
+    if rb is not None:
+        txt.append(f"le modèle retenu par la règle fixée d'avance (P&L total maximal sur la 1re moitié), `{best}`, "
+                   f"ne fait que {cents(rb['pnl_par_part'])} (IC {cents(rb['ic_bas'])} ; {cents(rb['ic_haut'])})"
+                   + (f" ; celui retenu par la log-loss, `{best_ll}`, {cents(rl['pnl_par_part'])} (IC {cents(rl['ic_bas'])} ; "
+                      f"{cents(rl['ic_haut'])})" if rl is not None and best_ll != best else ""))
+    if has_surc:
+        s = rob.loc[cand, "surcoût_mesuré"].dropna()
+        a = rob.loc[cand, "pnl_après_surcoût"].dropna()
+        txt.append(f"surtout, sur les positions de chaque modèle, les preneurs ont réellement payé de {cents(s.min(), 1, False)} "
+                   f"à {cents(s.max(), 1, False)} de plus que l'ask supposé dans [S−30 s, S) (1,7 c pour la baseline "
+                   f"`gap_m30`) : le modèle achète quand le carnet a déjà bougé. Après ce surcoût, le P&L par part va de "
+                   f"{cents(a.min())} à {cents(a.max())} et "
+                   + ("aucun n'a plus un IC entièrement positif" if not sig_cost else f"seuls {q(sig_cost)} gardent un IC > 0"))
+    t0 = " ; ".join(txt)
+    return ("**pas d'avantage démontré après frais.** " + t0[0].upper() + t0[1:] + ". L'avantage brut de 1 à 3 c par "
+            "part repose surtout sur l'information du TWAP partiel à 1 s, connue à S−30 s. Il est du même ordre que le "
+            "surcoût réellement payé pour l'exécuter, et il n'en reste rien de démontrable. " + brier_txt
+            + " TimesFM n'apporte rien. Avant toute conclusion, il faut un test papier sur le carnet réel (WebSocket).")
 
 
 def make_limits(ctx: dict) -> list[str]:
     chk = ctx["chk"]
     return [
         "**Prix d'exécution approché** : le point `prices-history` est un milieu de fourchette (ancienneté médiane "
-        f"{fr_num(chk['p_pre_age_médian_s'], 0)} s) ; ask = milieu + 0,005 suppose le carnet 0,50 / 0,51. Le diagnostic "
-        "(§ 6 bis) a mesuré un prix réellement payé plus élevé d'environ 1,7 c dans [S−30 s, S). La profondeur n'est pas "
-        "modélisée (1 part par marché ; quelques centaines de parts au plus au meilleur prix).",
-        "**Étiquette d'entraînement proxy** (VWAP 1m, ≈ 96,5 % d'accord avec l'issue officielle) : les modèles et leur "
-        "calibration isotonique visent le proxy, pas l'issue Chainlink ; l'évaluation, elle, porte sur l'issue officielle.",
+        f"{fr_num(chk['p_pre_age_médian_s'], 0)} s, et en retard d'environ 10 s sur Binance d'après le diagnostic) ; "
+        "ask = milieu + 0,005 suppose un écart d'un pas (0,50 / 0,51). Or "
+        f"{fr_num(100 * chk['part_milieu_cent_entier'], 1)} % des milieux tombent sur un cent entier (0,500, 0,490…), ce qui "
+        "impose un écart d'au moins 2 c avec un pas de 0,01 (variante « ask cohérent avec le pas », § 5 bis). "
+        + (f"Surtout, sur les positions des modèles, les preneurs ont réellement payé de "
+           f"{cents(ctx['robust']['surcoût_mesuré'].min(), 1, False)} à {cents(ctx['robust']['surcoût_mesuré'].max(), 1, False)} "
+           "de plus que l'ask supposé (§ 5 bis ; sous-échantillon de 600 marchés, 18–24/09). "
+           if "surcoût_mesuré" in ctx["robust"].columns else "")
+        + "La profondeur n'est pas modélisée (1 part par marché).",
+        f"**Étiquette d'entraînement proxy** (VWAP 1m, {fr_num(chk['accord_y_proxy'], 1, pct=True)} d'accord avec l'issue "
+        "officielle sur les marchés testés) : les modèles et leur calibration isotonique visent le proxy, pas l'issue "
+        "Chainlink ; l'évaluation, elle, porte sur l'issue officielle.",
+        "**Calibration** : l'isotonique, apprise sur la fin de la période d'apprentissage, élargit les probabilités des "
+        "modèles 1s. La relation s'est affaiblie entre la calibration (fin juillet – mi-août) et le test. Leurs "
+        "probabilités sont donc trop dispersées (pente de calibration < 1, § 4), ce qui gonfle le nombre de positions.",
         "**Période de test courte et unique** (6 semaines, un seul régime TWAP-60) ; les IC bootstrap groupés tiennent "
         "compte de la corrélation entre actifs et durées d'un même créneau, pas d'un éventuel changement de régime.",
         "**Sélection** : 6 modèles, l'empilement et 4 baselines sont comparés. Le choix du « meilleur » modèle et de sa "
-        "marge est fait sur la 1re moitié seulement, ce qui limite le biais. En revanche, les métriques de précision sur "
-        "la période complète comparent plusieurs modèles sans correction pour tests multiples.",
+        "marge est fait sur la 1re moitié seulement, ce qui limite le biais. Pour le P&L, le § 5 bis donne des IC "
+        "simultanés (bande max-|t| sur les 7 modèles). Les métriques de précision sur la période complète ne sont pas "
+        "corrigées pour tests multiples, et la 1re moitié y sert aussi au choix du modèle par log-loss.",
         "**Modèles 1s** appris sur ≈ 3 mois seulement (bougies 1s téléchargées depuis le "
         f"{ctx['args'].s1_start:%d/%m/%Y}) ; leur calibration isotonique repose sur ≈ 13 jours (≈ 11 700 origines).",
         "**Instant S−30 s** : les 30 dernières secondes de TWAP60(S) et la bougie [S−1 min, S) ne sont pas utilisées. Or "
@@ -1059,33 +1293,55 @@ def write_readme(ctx: dict) -> None:
       f"{fr_num(mk_['auc'], 3)} (IC {fr_num(mk_['auc_ic_bas'], 3)} ; {fr_num(mk_['auc_ic_haut'], 3)}), Brier "
       f"{fr_num(mk_['brier'], 4)} (pièce : 0,2500).")
     rl2, mk2b = E(best_ll, "2e moitié (test final)"), E("market", "2e moitié (test final)")
+    full_txt = ""
+    if best_brier == best_ll:
+        full_txt = (f" Sur toute la période, il bat le marché en justesse de {fr_num(100 * rb['d_justesse_vs_marché'], 1, signed=True)} "
+                    f"points (IC {fr_num(100 * rb['d_justesse_ic_bas'], 1, signed=True)} ; {fr_num(100 * rb['d_justesse_ic_haut'], 1, signed=True)}), "
+                    f"mais pas en Brier ({fr_num(1e3 * rb['d_brier_vs_marché'], 2, signed=True)} ×10⁻³, IC "
+                    f"{fr_num(1e3 * rb['d_brier_ic_bas'], 2, signed=True)} ; {fr_num(1e3 * rb['d_brier_ic_haut'], 2, signed=True)}) : "
+                    "ses probabilités sont trop dispersées (§ 4).")
+    else:
+        full_txt = (f" Meilleur a posteriori en Brier sur toute la période : `{best_brier}` "
+                    f"({fr_num(1e3 * rb['d_brier_vs_marché'], 2, signed=True)} ×10⁻³, IC {fr_num(1e3 * rb['d_brier_ic_bas'], 2, signed=True)} ; "
+                    f"{fr_num(1e3 * rb['d_brier_ic_haut'], 2, signed=True)}).")
     w(f"* **Modèle choisi sans regarder le test : `{best_ll}`** ({label(best_ll)}, meilleure log-loss sur la 1re moitié). "
       f"Sur la 2e moitié : justesse {ci(rl2, 'justesse')} contre {pct(mk2b['justesse'])} pour le marché, AUC {fr_num(rl2['auc'], 3)} "
       f"(IC {fr_num(rl2['auc_ic_bas'], 3)} ; {fr_num(rl2['auc_ic_haut'], 3)}) contre {fr_num(mk2b['auc'], 3)}, écart de Brier "
       f"{fr_num(1e3 * rl2['d_brier_vs_marché'], 2, signed=True)} ×10⁻³ (IC {fr_num(1e3 * rl2['d_brier_ic_bas'], 2, signed=True)} ; "
-      f"{fr_num(1e3 * rl2['d_brier_ic_haut'], 2, signed=True)}) : {sig(rl2['d_brier_ic_bas'], rl2['d_brier_ic_haut'])}.")
-    w(f"* **Meilleur modèle a posteriori (Brier, période complète) : `{best_brier}`** ({label(best_brier)}) : justesse {ci(rb, 'justesse')}, AUC "
-      f"{fr_num(rb['auc'], 3)} (IC {fr_num(rb['auc_ic_bas'], 3)} ; {fr_num(rb['auc_ic_haut'], 3)}), écart de Brier au marché "
-      f"{fr_num(1e3 * rb['d_brier_vs_marché'], 2, signed=True)} ×10⁻³ (IC {fr_num(1e3 * rb['d_brier_ic_bas'], 2, signed=True)} ; "
-      f"{fr_num(1e3 * rb['d_brier_ic_haut'], 2, signed=True)}) : {sig(rb['d_brier_ic_bas'], rb['d_brier_ic_haut'])}. "
-      f"Écart de justesse au marché : {fr_num(100 * rb['d_justesse_vs_marché'], 1, signed=True)} points "
-      f"(IC {fr_num(100 * rb['d_justesse_ic_bas'], 1, signed=True)} ; {fr_num(100 * rb['d_justesse_ic_haut'], 1, signed=True)}).")
-    w(f"* **Les indicateurs 1m seuls (1 an d'apprentissage) font à peine mieux qu'une pièce** : `{ind_best}` justesse "
-      f"{ci(ri, 'justesse')}, AUC {fr_num(ri['auc'], 3)} ; l'information utile vient surtout du **TWAP partiel 1s** "
+      f"{fr_num(1e3 * rl2['d_brier_ic_haut'], 2, signed=True)}) : {sig(rl2['d_brier_ic_bas'], rl2['d_brier_ic_haut'])}." + full_txt)
+    w(f"* **Les indicateurs 1m seuls (1 an d'apprentissage) font à peine mieux que le marché** : `{ind_best}` justesse "
+      f"{ci(ri, 'justesse')}, AUC {fr_num(ri['auc'], 3)}. L'information utile vient surtout du **TWAP partiel 1s** "
       f"(écart spot − moyenne des 30 dernières secondes, connu à S−30 s) : la règle seule `gap_m30` fait "
-      f"{ci(gap, 'justesse')}, AUC {fr_num(gap['auc'], 3)}.")
+      f"{ci(gap, 'justesse')}, AUC {fr_num(gap['auc'], 3)}."
+      + (lambda b5, m5, b15, m15: f" L'écart se concentre sur les **5m** (`{best_ll}` {pct(b5['justesse'])} contre {pct(m5['justesse'])} "
+         f"pour le marché) ; en **15m**, `{best_ll}` fait {pct(b15['justesse'])} contre {pct(m15['justesse'])}.")(
+          E(best_ll, cell="Tous 5m"), E("market", cell="Tous 5m"), E(best_ll, cell="Tous 15m"), E("market", cell="Tous 15m")))
     if rst is not None:
         w(f"* **Marché + modèle (empilement appris sur la 1re moitié, testé sur la 2e)** : Brier {fr_num(rst['brier'], 4)} contre "
           f"{fr_num(mk2['brier'], 4)} pour le marché seul (écart {fr_num(1e3 * rst['d_brier_vs_marché'], 2, signed=True)} ×10⁻³, IC "
-          f"{fr_num(1e3 * rst['d_brier_ic_bas'], 2, signed=True)} ; {fr_num(1e3 * rst['d_brier_ic_haut'], 2, signed=True)}), "
-          f"justesse {ci(rst, 'justesse')}, n = {n(rst['n'])}.")
+          f"{fr_num(1e3 * rst['d_brier_ic_bas'], 2, signed=True)} ; {fr_num(1e3 * rst['d_brier_ic_haut'], 2, signed=True)}) : "
+          f"{sig(rst['d_brier_ic_bas'], rst['d_brier_ic_haut'])}, mais minuscule. Justesse {ci(rst, 'justesse')}, n = {n(rst['n'])}.")
     if sb_t is not None and np.isfinite(sb_t.get("marge", np.nan)):
-        w(f"* **P&L preneur (1 part par marché, frais inclus)** : meilleur modèle sur la 1re moitié = `{best}`, marge retenue "
-          f"{fr_num(100 * sb_t['marge'], 2)} c. 1re moitié (en échantillon pour la marge) : {fr_num(sb_v['pnl_total_usd'], 1, signed=True)} $ "
-          f"sur {n(sb_v['n_trades'])} positions ; **2e moitié (hors échantillon) : {fr_num(sb_t['pnl_total_usd'], 1, signed=True)} $ sur "
-          f"{n(sb_t['n_trades'])} positions, soit {cents(sb_t['pnl_par_part'])} par part (IC {cents(sb_t['pnl_par_part_ic_bas'])} ; "
+        t2 = summ[(summ["mode"] == "taker") & (summ["échantillon"] == "2e moitié (test final)")].set_index("modèle")
+        others = [m for m in probs + ["stack"] if m in t2.index and m != best and np.isfinite(t2.loc[m].get("pnl_par_part", np.nan))]
+        all_zero = all(t2.loc[m, "pnl_par_part_ic_bas"] - EXTRA_COST <= 0 for m in others + [best])
+        w(f"* **P&L preneur (1 part par marché, frais inclus)** : la règle fixée d'avance (P&L total maximal sur la 1re moitié) "
+          f"retient `{best}` avec une marge de {fr_num(100 * sb_t['marge'], 2)} c : {fr_num(sb_v['pnl_total_usd'], 1, signed=True)} $ "
+          f"sur la 1re moitié (en échantillon pour la marge), **{fr_num(sb_t['pnl_total_usd'], 1, signed=True)} $ sur la 2e moitié "
+          f"({n(sb_t['n_trades'])} positions), soit {cents(sb_t['pnl_par_part'])} par part (IC {cents(sb_t['pnl_par_part_ic_bas'])} ; "
           f"{cents(sb_t['pnl_par_part_ic_haut'])})**, {sig(sb_t['pnl_par_part_ic_bas'], sb_t['pnl_par_part_ic_haut'])}. "
-          f"Avec le surcoût d'exécution mesuré dans le diagnostic (+1,7 c par part) : {cents(sb_t['pnl_par_part_surcoût_1_7c'])} par part.")
+          "Les autres modèles, 2e moitié, par part : "
+          + " ; ".join(f"`{m}` {cents(t2.loc[m, 'pnl_par_part'])} (IC {cents(t2.loc[m, 'pnl_par_part_ic_bas'])} ; "
+                       f"{cents(t2.loc[m, 'pnl_par_part_ic_haut'])})" for m in others)
+          + (". Avec le surcoût d'exécution de la baseline `gap_m30` mesuré dans le diagnostic (+1,7 c par part), tous les IC "
+             "contiennent 0." if all_zero else ". Voir § 5 pour le cas avec surcoût d'exécution.")
+          + (lambda rob: "" if not len(rob) or "surcoût_mesuré" not in rob.columns else
+             f" **Mesuré sur les positions de chaque modèle, le surcoût réel est de {cents(rob['surcoût_mesuré'].min(), 1, False)} "
+             f"à {cents(rob['surcoût_mesuré'].max(), 1, False)} par part ; P&L après ce surcoût : de "
+             f"{cents(rob['pnl_après_surcoût'].min())} à {cents(rob['pnl_après_surcoût'].max())} par part, "
+             + ("aucun IC n'est entièrement positif" if not (rob["pnl_après_surcoût_ic_bas"] > 0).any() else
+                "IC > 0 pour " + ", ".join("`" + m + "`" for m in rob.loc[rob["pnl_après_surcoût_ic_bas"] > 0, "modèle"]))
+             + " (§ 5 bis).**")(ctx["robust"]))
     btxt = "; ".join(f"`{k}` {cents(r['pnl_par_part'])} (IC {cents(r['pnl_par_part_ic_bas'])} ; {cents(r['pnl_par_part_ic_haut'])})"
                      for k, r in base_t.items() if r is not None)
     w(f"* **Baselines toujours en position (2e moitié, par part)** : {btxt}. Aucune n'est rentable après frais.")
@@ -1093,7 +1349,9 @@ def write_readme(ctx: dict) -> None:
         w(f"* **Borne haute maker (achat au bid, sans frais, exécution SUPPOSÉE certaine)** : `{best}` "
           f"{fr_num(mb_t['pnl_total_usd'], 1, signed=True)} $ sur {n(mb_t['n_trades'])} positions, {cents(mb_t['pnl_par_part'])} par part "
           f"(IC {cents(mb_t['pnl_par_part_ic_bas'])} ; {cents(mb_t['pnl_par_part_ic_haut'])}). Ce n'est pas un résultat atteignable "
-          "tel quel : un ordre au repos n'est exécuté que si un preneur vient le chercher, c'est-à-dire surtout quand il a tort (sélection adverse).")
+          "tel quel : un ordre au repos n'est exécuté que si un preneur vient le chercher, c'est-à-dire surtout quand il a tort (sélection adverse)."
+          + (lambda g: "" if g is None else f" La baseline `gap_m30`, toujours en position, fait autant ({cents(g['pnl_par_part'])} par part) : "
+             "cette borne mesure surtout le demi-écart capté, pas la qualité du modèle.")(S("gap_m30", "maker")))
     ti = ctx["tfm_info"]
     if ti.get("status") in ("ok", "cache") and len(ctx["ev_tfm"]):
         et = ctx["ev_tfm"]
@@ -1125,7 +1383,11 @@ def write_readme(ctx: dict) -> None:
       f"ancienneté <= 5 min ; ancienneté médiane {fr_num(chk['p_pre_age_médian_s'], 0)} s ; {pct(chk['p_pre_part_0.45_0.55'])} des prix "
       "dans [0,45 ; 0,55]. Hypothèse (documentée dans le diagnostic, carnet ≈ 0,50 / 0,51 avant l'ouverture) : "
       "**ask ≈ milieu + 0,005**, **bid ≈ milieu − 0,005**. Le diagnostic a mesuré que les preneurs ont en réalité payé "
-      "≈ 1,7 c de plus dans [S−30 s, S) : l'hypothèse est optimiste (voir la colonne « surcoût 1,7 c »).")
+      "≈ 1,7 c de plus dans [S−30 s, S) pour la baseline `gap_m30`"
+      + (f", et {cents(ctx['robust']['surcoût_mesuré'].min(), 1, False)} à {cents(ctx['robust']['surcoût_mesuré'].max(), 1, False)} "
+         "de plus sur les positions des modèles (§ 5 bis)" if "surcoût_mesuré" in ctx["robust"].columns else "")
+      + " : l'hypothèse est optimiste. Avec un pas de 0,01, un milieu sur un cent entier (0,500) implique même un "
+      "carnet d'au moins 0,49 / 0,51.")
     w(f"* **Collecte** : {n(info.get('found', 0))} marchés ; historiques de prix à {fr_num(args.max_rps, 0)} requêtes/s max, "
       f"{args.workers} fils ; codes HTTP de cette exécution : {info.get('http_status', {})} ; durée de la collecte des prix : "
       f"{n(info.get('fetch_seconds', 0))} s dans cette exécution (≈ 0 quand tout est en cache) ; 1re collecte, à froid : "
@@ -1272,19 +1534,24 @@ def write_readme(ctx: dict) -> None:
     w("")
     w(to_markdown(pd.DataFrame(rows)))
     w("")
+    rb_ = ctx["raw_brier"]
     rows = []
-    yv = M["y"].to_numpy(dtype="float64")
-    bm = float(np.mean((M["p_pre"].to_numpy() - yv) ** 2))
     for m in probs:
-        if f"praw_{m}" not in M.columns:
-            continue
-        pr, pc = M[f"praw_{m}"].to_numpy(dtype="float64"), M[f"p_{m}"].to_numpy(dtype="float64")
-        rows.append({"modèle": m, "Brier brut": fr_num(np.mean((pr - yv) ** 2), 4), "Brier isotonique": fr_num(np.mean((pc - yv) ** 2), 4),
-                     "Brier marché": fr_num(bm, 4), "écart-type p brut": fr_num(np.std(pr), 3),
-                     "écart-type p isotonique": fr_num(np.std(pc), 3),
-                     "p isotonique min – max": f"{fr_num(np.min(pc), 3)} – {fr_num(np.max(pc), 3)}"})
-    w("Effet de la calibration isotonique (période complète). Les probabilités « brutes » sont la sortie directe du "
-      "classifieur ; toutes les métriques et le P&L ci-dessus utilisent la version isotonique :")
+        r0 = rb_[(rb_["modèle"] == m) & (rb_["version"] == "brut")].iloc[0]
+        r1 = rb_[(rb_["modèle"] == m) & (rb_["version"] == "isotonique")].iloc[0]
+        f3 = lambda r, k: (f"{fr_num(1e3 * r[k], 2, signed=True)} [{fr_num(1e3 * r[k + '_ic_bas'], 2, signed=True)} ; "  # noqa: E731
+                           f"{fr_num(1e3 * r[k + '_ic_haut'], 2, signed=True)}]")
+        rows.append({"modèle": m, "Brier brut": fr_num(r0["brier"], 4), "Brier isotonique": fr_num(r1["brier"], 4),
+                     "ΔBrier brut vs marché, période [IC]": f3(r0, "d_brier"),
+                     "ΔBrier brut vs marché, 2e moitié [IC]": f3(r0, "d_brier_2e"),
+                     "ΔBrier isotonique, 2e moitié [IC]": f3(r1, "d_brier_2e"),
+                     "écart-type p brut / isotonique": f"{fr_num(r0['p_sd'], 3)} / {fr_num(r1['p_sd'], 3)}"})
+    w("**Effet de la calibration isotonique.** Les probabilités « brutes » sont la sortie directe du classifieur. Toutes "
+      "les métriques et le P&L des § 3 et 5 utilisent la version isotonique demandée. Sur les modèles 1s, l'isotonique "
+      "**élargit** les probabilités : sur le segment de calibration (fin juillet – mi-août), la relation était plus forte "
+      "que sur la période de test (AUC 0,56 contre 0,54 sur l'étiquette proxy, voir `apprentissage.csv`). Le choix "
+      "« brut contre isotonique » fait après coup sur ce tableau serait de la sélection sur le test. Il est donné à titre "
+      "de diagnostic (×10⁻³, < 0 = mieux que le marché) :")
     w("")
     w(to_markdown(pd.DataFrame(rows), code_columns=["modèle"]))
     w("")
@@ -1304,14 +1571,14 @@ def write_readme(ctx: dict) -> None:
         if r2 is None or not np.isfinite(r2.get("n_marchés", np.nan)):
             rows.append({"modèle": m, "marge": "aucune (< min. de positions)", "1re : positions": "—", "1re : P&L $": "—",
                          "2e : positions": "—", "2e : taux de gain": "—", "2e : coût moyen": "—", "2e : P&L $": "—",
-                         "2e : P&L par part [IC 95 %]": "—", "2e : P&L/part si +1,7 c": "—"})
+                         "2e : P&L par part [IC 95 %]": "—", "2e : P&L/part si +1,7 c [IC 95 %]": "—"})
             continue
         rows.append({"modèle": m, "marge": cents(r2["marge"], 2, signed=False) if np.isfinite(r2["marge"]) else "toujours",
                      "1re : positions": n(r1["n_trades"]), "1re : P&L $": fr_num(r1["pnl_total_usd"], 1, signed=True),
                      "2e : positions": n(r2["n_trades"]), "2e : taux de gain": pct(r2["taux_gain"]),
                      "2e : coût moyen": fr_num(r2["coût_moyen"], 3), "2e : P&L $": fr_num(r2["pnl_total_usd"], 1, signed=True),
                      "2e : P&L par part [IC 95 %]": f"{cents(r2['pnl_par_part'])} [{cents(r2['pnl_par_part_ic_bas'])} ; {cents(r2['pnl_par_part_ic_haut'])}]",
-                     "2e : P&L/part si +1,7 c": cents(r2["pnl_par_part_surcoût_1_7c"])})
+                     "2e : P&L/part si +1,7 c [IC 95 %]": f"{cents(r2['pnl_par_part_surcoût_1_7c'])} [{cents(r2['pnl_par_part_ic_bas'] - EXTRA_COST)} ; {cents(r2['pnl_par_part_ic_haut'] - EXTRA_COST)}]" if r2["n_trades"] else "—"})
     w(to_markdown(pd.DataFrame(rows), code_columns=["modèle"]))
     w("")
     w("*`stack` : sur la 1re moitié, ses probabilités sont en échantillon (l'empilement y est appris), donc la marge est "
@@ -1343,6 +1610,70 @@ def write_readme(ctx: dict) -> None:
                      "2e : P&L par part [IC 95 %]": f"{cents(r2['pnl_par_part'])} [{cents(r2['pnl_par_part_ic_bas'])} ; {cents(r2['pnl_par_part_ic_haut'])}]"})
     w(to_markdown(pd.DataFrame(rows), code_columns=["modèle"]))
     w("")
+    # ------------------------------------------------------------------ robustesse
+    rob, exe = ctx["robust"], ctx["exe"]
+    w("## 5 bis. Robustesse : exécution et tests multiples")
+    w("")
+    w("Quatre contrôles sur le P&L preneur de la 2e moitié, à la marge choisie sur la 1re moitié :")
+    w("")
+    w("* **IC par blocs d'un jour** (21 grappes) au lieu des créneaux de 15 min, contre une dépendance plus longue. Avec si "
+      "peu de grappes, ce bootstrap est lui-même imprécis (il peut donner un IC plus étroit) : c'est un contrôle, pas la référence.")
+    if len(rob) and "q_simultané" in rob.columns:
+        w(f"* **IC simultanés** sur les {len(rob)} modèles (bande max-|t| sur les mêmes tirages, quantile "
+          f"{fr_num(rob['q_simultané'].iloc[0], 2)} au lieu de 1,96) : c'est la correction pour tests multiples.")
+    w(f"* **Ask cohérent avec le pas de 0,01** : un milieu sur un cent entier (0,500, 0,490… : "
+      f"{fr_num(100 * chk['part_milieu_cent_entier'], 1)} % des marchés, jusqu'à la moitié en SOL 5m) impose un carnet "
+      "d'au moins 0,49 / 0,51, donc ask = milieu + 0,01 et non + 0,005. La marge est re-choisie sur la 1re moitié avec ce coût.")
+    w("* **Surcoût mesuré sur les positions de chaque modèle** : sur le sous-échantillon aléatoire du diagnostic (600 marchés, "
+      "18–24/09, donc dans la 2e moitié), prix moyen réellement payé par les preneurs du côté choisi par le modèle dans "
+      "[S−30 s, S), moins l'ask supposé. Le P&L « après surcoût » soustrait ce surcoût, propre au modèle, à chaque position "
+      "(IC : approximation normale combinant les deux incertitudes).")
+    w("")
+    if len(rob):
+        rows = []
+        for _, r in rob.iterrows():
+            f = lambda a, b, c: f"{cents(r[a])} [{cents(r[b])} ; {cents(r[c])}]" if np.isfinite(r.get(a, np.nan)) else "—"  # noqa: E731
+            rows.append({"modèle": r["modèle"], "positions": n(r["n_positions"]),
+                         "P&L/part [IC créneau 15 min]": f("pnl_par_part", "ic_bas", "ic_haut"),
+                         "IC blocs jour": f"[{cents(r['ic_jour_bas'])} ; {cents(r['ic_jour_haut'])}]",
+                         "IC simultané": (f"[{cents(r['ic_simultané_bas'])} ; {cents(r['ic_simultané_haut'])}]"
+                                          if "ic_simultané_bas" in r and np.isfinite(r["ic_simultané_bas"]) else "—"),
+                         "ask cohérent avec le pas : P&L/part [IC]": f("tick_pnl_par_part", "tick_ic_bas", "tick_ic_haut"),
+                         "surcoût mesuré [IC] (n)": (f"{cents(r['surcoût_mesuré'])} [{cents(r['surcoût_ic_bas'])} ; "
+                                                     f"{cents(r['surcoût_ic_haut'])}] ({n(r['surcoût_n'])})")
+                         if np.isfinite(r.get("surcoût_mesuré", np.nan)) else "—",
+                         "P&L/part après surcoût mesuré [IC]": f("pnl_après_surcoût", "pnl_après_surcoût_ic_bas",
+                                                                 "pnl_après_surcoût_ic_haut")})
+        w(to_markdown(pd.DataFrame(rows), code_columns=["modèle"]))
+        w("")
+    if len(exe):
+        w("Contrôle d'exécution détaillé (sous-échantillon du diagnostic, positions avec au moins une transaction preneuse "
+          "du côté choisi dans [S−30 s, S)) :")
+        w("")
+        rows = []
+        for _, r in exe.iterrows():
+            rows.append({"modèle": r["modèle"], "positions (échantillon)": n(r["n_positions"]),
+                         "avec transaction": n(r["n_avec_transaction"]), "ask supposé moyen": fr_num(r["prix_supposé_moyen"], 3),
+                         "prix payé moyen": fr_num(r["prix_payé_moyen"], 3),
+                         "surcoût [S−30 s, S) [IC]": f"{cents(r['surcoût'])} [{cents(r['surcoût_ic_bas'])} ; {cents(r['surcoût_ic_haut'])}]",
+                         "surcoût [S−30 s, S−20 s) [IC] (n)": (f"{cents(r['surcoût_10s'])} [{cents(r['surcoût_10s_ic_bas'])} ; "
+                                                             f"{cents(r['surcoût_10s_ic_haut'])}] ({n(r['n_avec_transaction_10s'])})")
+                         if np.isfinite(r.get("surcoût_10s", np.nan)) else "—",
+                         "P&L/part, ask supposé": cents(r["pnl_par_part_ask_supposé"]),
+                         "P&L/part, prix payé [IC]": f"{cents(r['pnl_par_part_prix_payé'])} [{cents(r['pnl_prix_payé_ic_bas'])} ; "
+                                                     f"{cents(r['pnl_prix_payé_ic_haut'])}]"})
+        w(to_markdown(pd.DataFrame(rows), code_columns=["modèle"]))
+        w("")
+        w("*Le surcoût est plus élevé pour les modèles que pour `gap_m30`, et bien plus faible pour « toujours Up », qui "
+          "n'utilise aucune information. "
+          + ("Il est du même ordre dès les 10 premières secondes ([S−30 s, S−20 s)) : il ne vient donc pas des seules "
+             "transactions tardives de la fenêtre. " if "surcoût_10s" in exe.columns else "")
+          + "Un modèle ne prend position que lorsque son signal "
+          "s'écarte du prix, c'est-à-dire justement quand les autres preneurs et les teneurs de marché ont déjà déplacé le "
+          "carnet entre l'horodatage du point `prices-history` et l'ordre. Le prix payé par d'autres preneurs reste un proxy "
+          "optimiste de notre propre exécution (ni latence, ni file, ni impact). Le P&L au prix payé n'est calculé que sur "
+          "quelques dizaines à centaines de positions : ses IC sont larges.*")
+        w("")
     # ------------------------------------------------------------------ TimesFM
     w("## 6. TimesFM")
     w("")
@@ -1352,7 +1683,7 @@ def write_readme(ctx: dict) -> None:
           "poids non commerciaux, usage de recherche). Le contexte est formé des 512 closes 1m qui finissent à la bougie close à "
           "S−1 min. On applique `prob_up` avec comme seuil la dernière valeur, à l'horizon D/1 min + 1 bougie. Le résultat est "
           f"recalibré par régression isotonique sur des origines BTC des 4 semaines précédant le {args.start:%d/%m} (étiquette proxy VWAP). "
-          f"Le sous-échantillon est un tirage régulier de marchés BTC 5m et 15m ; temps de calcul : {n(ti.get('seconds', 0))} s.")
+          f"Le sous-échantillon est un tirage régulier de marchés BTC 5m et 15m ; temps de calcul (à froid) : {ctx.get('cold_tfm', '—')}.")
         w("")
         rows = []
         for m in ["market", "timesfm", "timesfm_cal", best_brier]:
@@ -1398,6 +1729,8 @@ def write_readme(ctx: dict) -> None:
         ("pnl_par_cellule.csv", "P&L de la 2e moitié par actif × durée"),
         ("pnl_cumule_journalier.csv", "P&L cumulé jour par jour (2e moitié)"),
         ("apprentissage.csv", "périodes, tailles, itérations et AUC de validation de chaque modèle"),
+        ("robustesse_pnl.csv", "P&L de la 2e moitié : IC par blocs d'un jour, IC simultanés, ask cohérent avec le pas, après surcoût mesuré"),
+        ("controle_execution.csv", "prix réellement payés par les preneurs sur les positions de chaque modèle (sous-échantillon du diagnostic)"),
         ("runtime.csv", "temps d'exécution par étape"),
         ("justesse_brier_vs_marche.png, calibration.png, pnl_vs_marge.png, pnl_cumule_test.png", "graphiques"),
     ]:
@@ -1431,6 +1764,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--stage", default="all", choices=["all", "data", "fit"])
     p.add_argument("--refit", action="store_true", help="ignore les caches d'indicateurs / prévisions / TimesFM")
     p.add_argument("--no-fetch", action="store_true", help="n'utilise que les prix Polymarket déjà en cache")
+    p.add_argument("--exec-subwindows", action="store_true",
+                   help="(re)collecte les transactions du sous-échantillon du diagnostic par sous-fenêtre après S − 30 s")
     p.add_argument("--split", default=None, help="coupure validation / test final (UTC ; défaut : milieu de la période)")
     p.add_argument("--out", default=str(OUT_DIR))
     p.add_argument("--seed", type=int, default=0)
@@ -1463,6 +1798,9 @@ def main(argv=None) -> int:
         mk, info = collect_polymarket(args, rt)
         log.info("marchés : %s", json.dumps({k: v for k, v in info.items() if k not in ("sampled_out", "regimes")},
                                             default=str))
+        if args.exec_subwindows and DIAG_TRADES.exists():
+            with rt("1c. transactions du sous-échantillon du diagnostic par sous-fenêtre (contrôle d'exécution)"):
+                fetch_trade_subwindows(mk)
         if args.stage == "data":
             log.info("collecte terminée en %.0f s", time.perf_counter() - t_all)
             return 0
@@ -1517,6 +1855,7 @@ def main(argv=None) -> int:
             chk[f"n_{c}"] = int(ok.sum())
         chk["p_pre_age_médian_s"] = float(M["p_pre_age_s"].median())
         chk["p_pre_part_0.45_0.55"] = float(M["p_pre"].between(0.45, 0.55).mean())
+        chk["part_milieu_cent_entier"] = float(np.mean(pb.tick_half_spread(M["p_pre"].to_numpy()) > 0.0075))
         chk["frais"] = M.groupby(["fee_type", "fee_rate", "fee_exponent"], dropna=False).size().to_dict()
         mid = args.split if args.split is not None else args.start + (args.end - args.start) / 2
         mid_ts = int(mid.timestamp())
@@ -1570,6 +1909,20 @@ def main(argv=None) -> int:
             ev_tfm = eval_table(sub, ["timesfm", "timesfm_cal"] + models, {}, boot_s, mid_ts,
                                 cell_filter=lambda sc, ce: ce.startswith("Tous") or ce.startswith("BTC"))
         calib = calib_tables(M, models, np.ones(len(M), bool))
+        # probabilités brutes (sans isotonique) : écart de Brier au marché avec IC
+        yv, pmv = M["y"].to_numpy(dtype="float64"), M["p_pre"].to_numpy(dtype="float64")
+        tst_mask = (M["start_ts"] >= mid_ts).to_numpy()
+        raw_rows = []
+        for m in models:
+            for kind, col in (("brut", f"praw_{m}"), ("isotonique", f"p_{m}")):
+                d = (M[col].to_numpy(dtype="float64") - yv) ** 2 - (pmv - yv) ** 2
+                full, half2 = boot.mean(d), boot.mean(d, tst_mask)
+                raw_rows.append({"modèle": m, "version": kind,
+                                 "brier": float(np.mean((M[col].to_numpy(dtype="float64") - yv) ** 2)),
+                                 "d_brier": full[0], "d_brier_ic_bas": full[1], "d_brier_ic_haut": full[2],
+                                 "d_brier_2e": half2[0], "d_brier_2e_ic_bas": half2[1], "d_brier_2e_ic_haut": half2[2],
+                                 "p_sd": float(np.std(M[col]))})
+        raw_brier = pd.DataFrame(raw_rows)
 
     with rt("7. P&L (marge choisie sur la 1re moitié, évaluée sur la 2e)"):
         pnl = pnl_stage(M.assign(p_stack=M["p_stack_pnl"]), models + ["stack"], signals, boot, mid_ts,
@@ -1580,10 +1933,13 @@ def main(argv=None) -> int:
         best_pnl = tv.set_index("modèle")["pnl_total_usd"].idxmax() if len(tv) else models[0]
         cellp = pnl_cells(M, pnl["trades"], [best_pnl, "stack", "gap_m30", "rev15", "always_up", "mkt_gt_05"],
                           boot, mid_ts)
+        exe = execution_check(M, pnl["trades"], models + ["stack", "gap_m30", "rev15", "always_up", "mkt_gt_05"],
+                              args.bootstrap, args.seed)
+        robust = robustness_table(M, pnl, exe, boot, mid_ts, models + ["stack"], args.bootstrap, args.seed)
 
     ctx = dict(args=args, info=info, chk=chk, M=M, ev=ev, ev_tfm=ev_tfm, tfm_info=tfm_info, calib=calib,
-               pnl=pnl, cellp=cellp, best_pnl=best_pnl, best_ll=best_ll, stack_info=stack_info,
-               train_info=train_info, mid=mid, mid_ts=mid_ts, models=models, signals=signals, rt=rt,
+               pnl=pnl, cellp=cellp, best_pnl=best_pnl, best_ll=best_ll, stack_info=stack_info, exe=exe, robust=robust,
+               train_info=train_info, mid=mid, mid_ts=mid_ts, models=models, signals=signals, rt=rt, raw_brier=raw_brier,
                t_all=t_all, out_dir=out_dir)
     ctx["verdict"] = make_verdict(ctx)
     ctx["limits"] = make_limits(ctx)
@@ -1591,6 +1947,8 @@ def main(argv=None) -> int:
         cold = json.loads(COLD_PATH.read_text()) if COLD_PATH.exists() else {}
     except ValueError:
         cold = {}
+    ct = cold.get("TimesFM")
+    ctx["cold_tfm"] = f"{fr_num(ct['secondes'], 0)} s ({ct['note']})" if ct else "—"
     cf = cold.get("prix Polymarket S−30 s")
     ctx["cold_fetch"] = f"{fr_num(cf['secondes'], 0)} s ({cf['note']})" if cf else "—"
     ctx["cold_times"] = "; ".join(f"{k} {fr_num(v['secondes'], 0)} s ({v['note']})" for k, v in cold.items()) or "—"

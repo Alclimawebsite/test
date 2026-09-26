@@ -1,0 +1,13 @@
+étape,secondes
+1a. liste des marchés + issue officielle (list_updown_markets),6.300781271998858
+"1b. prix du jeton Up à S−30 s (prices_history, 0 marchés hors cache)",6.59119996271329e-05
+"2a. Binance 1m + dérivés (tradebot.data.load_universe, 1 an, cache)",6.782555186999161
+"2b. Binance 1s -> agrégats par minute (2026-05-15 -> 2026-09-25, zips journaliers, cache)",1.286194936999891
+"3a. indicateurs 1m (compute_indicators) à S − 2 min, grille 5 min",0.7126464630000555
+"4. apprentissage (6 modèles × 2 durées, calibration isotonique)",0.019913091000489658
+"6a. jointure marchés / prévisions, contrôles",0.09366743200007477
+5. TimesFM (sous-échantillon 1500 marchés BTC),0.0035200249985791743
+6b. métriques hors échantillon (bootstrap groupé par créneau de 15 min),29.83893195699966
+"7. P&L (marge choisie sur la 1re moitié, évaluée sur la 2e)",25.836975424999764
+"8. CSV, graphiques et README",5.41882902800171
+total,78.79810090300089

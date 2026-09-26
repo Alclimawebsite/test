@@ -58,7 +58,7 @@ __all__ = [
     "bar_lookup", "vwap_label", "indicator_rows", "twap_partial_features", "baseline_features",
     "train_segments", "ProbModel", "prob_metrics", "calibration_table",
     "SlotBootstrap", "weighted_auc", "taker_trades", "maker_trades", "pnl_by_margin",
-    "choose_margin",
+    "choose_margin", "tick_half_spread",
 ]
 
 # ---------------------------------------------------------------------------
@@ -633,6 +633,21 @@ class SlotBootstrap:
     def mean(self, x: np.ndarray, mask: np.ndarray | None = None) -> tuple[float, float, float]:
         return self.ratio(x, 1.0, mask)
 
+    def ratio_draws(self, num: np.ndarray, den: np.ndarray | float = 1.0,
+                    mask: np.ndarray | None = None) -> tuple[float, np.ndarray]:
+        """``(Σ num / Σ den, tirages bootstrap)`` : mêmes tirages que :meth:`ratio`, pour des IC
+        simultanés sur plusieurs statistiques (bande max-|t|)."""
+        num = np.asarray(num, dtype="float64")
+        den = np.broadcast_to(np.asarray(den, dtype="float64"), num.shape)
+        ok = np.isfinite(num) & np.isfinite(den)
+        if mask is not None:
+            ok &= np.asarray(mask, bool)
+        gn, gd = self._gsum(num, ok), self._gsum(den, ok)
+        if gd.sum() == 0:
+            return math.nan, np.full(self.B, np.nan)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            return float(gn.sum() / gd.sum()), (self.counts @ gn) / (self.counts @ gd)
+
     def auc(self, y: np.ndarray, s: np.ndarray, mask: np.ndarray | None = None,
             B: int = 300) -> tuple[float, float, float]:
         y = np.asarray(y, dtype="float64")
@@ -722,18 +737,32 @@ def _book(e_up, e_dn, px_up, px_dn, fee_up, fee_dn, y, margin) -> pd.DataFrame:
     return pd.DataFrame({"side": side, "price": price, "fee": fee, "edge": edge, "pnl": pnl, "win": win})
 
 
+def tick_half_spread(p_mid: np.ndarray, tick: float = 0.01) -> np.ndarray:
+    """Demi-écart MINIMAL compatible avec un milieu ``p_mid`` sur une grille de pas ``tick``.
+
+    Bid et ask sont des multiples du pas : un milieu à un demi-pas (0,505) admet un écart
+    d'un pas (0,50 / 0,51) -> demi-écart ``tick / 2`` ; un milieu sur un pas entier (0,500)
+    impose un écart pair, donc d'au moins deux pas (0,49 / 0,51) -> demi-écart ``tick``.
+    """
+    p = np.asarray(p_mid, dtype="float64")
+    ok = np.isfinite(p)
+    half = np.round(np.where(ok, p, 0.0) / (tick / 2)).astype("int64") % 2 == 1
+    return np.where(ok, np.where(half, tick / 2, tick), np.nan)
+
+
 def pnl_by_margin(p_model: np.ndarray, p_mkt: np.ndarray, y: np.ndarray, margins: Sequence[float],
                   fee_rate=0.07, fee_exponent=1.0, mode: str = "taker",
-                  mask: np.ndarray | None = None) -> pd.DataFrame:
+                  mask: np.ndarray | None = None, half_spread=HALF_SPREAD) -> pd.DataFrame:
     """Courbe P&L contre marge : ``n_trades``, ``pnl_total`` ($, 1 part par marché),
-    ``pnl_per_trade``, ``win_rate``, ``avg_cost`` (prix + frais moyen des positions)."""
+    ``pnl_per_trade``, ``win_rate``, ``avg_cost`` (prix + frais moyen des positions).
+    ``half_spread`` : scalaire ou tableau par marché (ex. :func:`tick_half_spread`)."""
     rows = []
     msk = np.ones(len(np.asarray(y)), bool) if mask is None else np.asarray(mask, bool)
     for mg in margins:
         if mode == "taker":
-            t = taker_trades(p_model, p_mkt, y, mg, fee_rate, fee_exponent)
+            t = taker_trades(p_model, p_mkt, y, mg, fee_rate, fee_exponent, half_spread)
         else:
-            t = maker_trades(p_model, p_mkt, y, mg)
+            t = maker_trades(p_model, p_mkt, y, mg, half_spread)
         t = t[msk]
         tr = t["side"] != 0
         n = int(tr.sum())
