@@ -35,11 +35,9 @@ haute) : achat au bid ``p − 0,005`` sans frais, en supposant l'ordre exécuté
 
 from __future__ import annotations
 
-import io
 import logging
 import math
 import threading
-import time
 import warnings
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -296,6 +294,8 @@ def bar_lookup(frame: pd.DataFrame, times_s: np.ndarray, cols: Sequence[str] | s
     (s Unix) ; NaN si la ligne n'existe pas (trou de données : jamais de report)."""
     single = isinstance(cols, str)
     cols = [cols] if single else list(cols)
+    if not frame.index.is_monotonic_increasing:
+        frame = frame.sort_index()
     idx = to_unix(frame.index)
     pos = np.searchsorted(idx, times_s)
     ok = (pos < len(idx)) & (idx[np.minimum(pos, len(idx) - 1)] == times_s)
@@ -440,7 +440,11 @@ class ProbModel:
     ``tradebot.evaluation`` (profondeur 3, taux 0,05) avec plus d'itérations possibles.
     ``calibrate(X, y)`` ajuste une recalibration isotonique
     (:func:`tradebot.forecaster.calibrate_isotonic`) sur une période postérieure à
-    l'apprentissage ; ``predict`` la applique si elle existe.
+    l'apprentissage ; ``predict`` la applique si elle existe. Les scores bruts sont d'abord
+    **winsorisés** aux quantiles ``winsor`` / ``1 − winsor`` du segment de calibration (mêmes
+    bornes ensuite) : les blocs extrêmes de l'isotonique contiennent alors au moins ``winsor``
+    des observations, au lieu de quelques points poussés à 0,01 / 0,99 (surconfiance mesurée
+    sans cette précaution sur un segment de calibration de ≈ 8 000 origines).
     """
 
     kind: str = "logit"
@@ -453,6 +457,8 @@ class ProbModel:
     est_: object | None = None
     iso_: Callable | None = None
     n_iter_: int | None = None
+    winsor: float = 0.01
+    clip_: tuple[float, float] | None = None
 
     def _prep(self, X: np.ndarray) -> np.ndarray:
         X = np.asarray(X, dtype="float64")[:, self.keep_]
@@ -507,12 +513,17 @@ class ProbModel:
     def calibrate(self, X: np.ndarray, y: np.ndarray) -> "ProbModel":
         from .forecaster import calibrate_isotonic
 
-        self.iso_ = calibrate_isotonic(self.predict_raw(X), y)
+        raw = self.predict_raw(X)
+        lo, hi = np.quantile(raw, [self.winsor, 1.0 - self.winsor]) if self.winsor > 0 else (0.0, 1.0)
+        self.clip_ = (float(lo), float(hi))
+        self.iso_ = calibrate_isotonic(np.clip(raw, lo, hi), y)
         return self
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         p = self.predict_raw(X)
-        return self.iso_(p) if self.iso_ is not None else p
+        if self.iso_ is None:
+            return p
+        return self.iso_(np.clip(p, *self.clip_))
 
 
 # ---------------------------------------------------------------------------
