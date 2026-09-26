@@ -1,6 +1,6 @@
 # Memecoins : la « rotation » entre community coins bat-elle la détention ?
 
-*Généré le 26/09/2026 16:21 UTC par `scripts/memecoin_rotation.py` (669 s). Données : 55 perpétuels USDT classés « Meme » par Binance, dont 8 retirés de la cote, bougies quotidiennes ; étude du 20/01/2024 au 25/09/2026. Version corrigée après relecture contradictoire (§ 12).*
+*Généré le 26/09/2026 16:33 UTC par `scripts/memecoin_rotation.py` (648 s). Données : 55 perpétuels USDT classés « Meme » par Binance, dont 8 retirés de la cote, bougies quotidiennes ; étude du 20/01/2024 au 25/09/2026. Version corrigée après relecture contradictoire (§ 12).*
 
 > Recherche sur données publiques historiques, aucun ordre, aucune recommandation. Les liens de parrainage et le canal d'« appels » de l'article testé ne sont pas repris ici.
 
@@ -10,12 +10,12 @@ La thèse testée (fil X « Ultimate Memecoin Trading Guide », 2026) : parmi de
 
 * **B ne fait pas « le même 3x ».** Au premier jour sous 20 % de sa fourchette de 60 jours, un memecoin atteint +200 % dans les 60 jours suivants dans **4 %** des cas (IC 95 % 2 % – 7 %), comme une pièce éligible quelconque (4 %). Il reperd 30 % à un moment dans **50 %** des cas (IC 35 % – 66 % ; l'auteur : « −30 % au pire »).
 * **A retombe bien, mais lentement.** Depuis son sommet, la plus forte baisse médiane après un 3x est de −55 % sur 60 jours et −75 % sur 180 jours ; −70 % ou pire dans 13 % des cas à 60 jours et 63 % à 180 jours (pièce quelconque : 46 %). Le « repli typique de −70 % » de l'auteur se vérifie donc à long terme ; il ne dit pas quand vendre (n = 54 événements).
-* **La décision de rotation elle-même** (43 cas : vendre A le jour de son 3x, acheter la pièce la plus basse de sa fourchette, frais déduits) : en moyenne **+146 %** de richesse à 60 jours par rapport à garder A (IC 95 % −6 % ; +523 %, médiane −10 %), gagnante dans 49 % des cas. Vers une pièce éligible quelconque : +166 % (IC +23 % ; +501 %). Aucun des deux n'est démontré.
+* **La décision de rotation elle-même** (43 cas : vendre A le jour de son 3x, acheter la pièce la plus basse de sa fourchette, frais déduits) : pour 1 $, la rotation laisse en moyenne **−38 %** de richesse à 60 jours par rapport à garder A (IC 95 % −118 % ; +7 %, médiane −6 %), gagnante dans 49 % des cas. Vers une pièce éligible quelconque : −19 % (IC −99 % ; +24 %). Aucun des deux n'est démontré.
 * **Les pièces en retard ne rattrapent pas de façon mesurable.** Corrélation de rang entre la position dans la fourchette et le rendement des 30 jours suivants : +0,026 (t de Newey-West +0,7) : ni retour à la moyenne ni momentum démontré.
 * **Portefeuille de la règle testée (F0, 2 pièces)** : elle ne tourne que 2 fois en 2,7 ans ; 0,42 × la mise contre 1,92 × pour le détenteur des mêmes pièces, 0,71 × pour le panier et 0,73 × pour la rotation inverse (mêmes achats et déclenchements, cible en haut de fourchette). Ce résultat tient à 2 décisions : ce n'est pas une mesure de la stratégie.
 * **Quatre lectures de la règle, deux univers, 2 ou 5 pièces** (16 cas, § 6) : sur la période entière, la rotation va de 0,19 × à 6,11 × le détenteur. Le meilleur cas (F2, community coins, 2 pièces : 13,53 × contre 2,21 ×, 3 rotations) est une seule trajectoire : sur les départs mensuels tenus 12 mois, il gagne 5 fois, perd 6 fois et fait 10 égalités. Tous cas réunis : 98 départs gagnés, 140 perdus, 98 égalités.
-* **Tous les réglages** (432 ; 381 tournent au moins une fois) : 23 des 381 font mieux que le détenteur aux mêmes achats. Le meilleur (range_top mult=3 range=30 bottom=0.1 k=5) a un Sharpe dégonflé de **0,46** (259 séries distinctes ; seuil 0,95). Walk-forward : les 1 réglages à égalité en tête sur la 1re moitié font en médiane 0,23 × sur la 2e, contre 0,33 × pour leurs détenteurs.
-* **Une rotation systématique vers le bas de fourchette détruit de la valeur** : chaque semaine vers les 2 pièces les plus basses, 0,00 × la mise contre 0,71 × pour le panier (écart −85 % par an, IC −94 % ; −65 %).
+* **Tous les réglages** (432 ; 381 tournent au moins une fois) : 23 des 381 font mieux que le détenteur aux mêmes achats. Le meilleur (range_top mult=3 range=30 bottom=0.1 k=5) a un Sharpe dégonflé de **0,46** (259 séries distinctes ; seuil 0,95). Walk-forward : le réglage choisi sur la 1re moitié fait 0,23 × sur la 2e, contre 0,33 × pour le détenteur aux mêmes achats.
+* **Une rotation systématique vers le bas de fourchette détruit de la valeur** : chaque semaine vers les 2 pièces les plus basses, 0,0042 × la mise contre 0,71 × pour le panier (écart −85 % par an, IC −94 % ; −65 %).
 * **Verdict.** Aucune version de « vendre le 3x, acheter le bas de fourchette » ne montre d'avantage qui se répète d'un point de départ à l'autre, ni dans les décisions elles-mêmes. Le calcul de l'auteur (gain/risque 6,7 contre 1,4 ; 270 k$ contre 27 k$) suppose connue l'issue : que B refera 3x (4 % des cas mesurés) sans perdre plus de 30 % (50 %). Une trajectoire spectaculaire existe (F2), mais c'est une trajectoire, pas une règle.
 
 ## 1. Données et règle testée
@@ -57,14 +57,14 @@ Hypothèses de l'auteur, face à la mesure :
 
 ## 3. La décision de rotation, appariée
 
-Le jour où A fait 3x : ce que rapporte le fait de vendre A et d'acheter B (ou une pièce quelconque), en richesse finale, frais de la vente et de l'achat déduits : (1 + r_B)/(1 + r_A) × (1 − coût)² − 1. IC 95 % par bootstrap en tirant des mois entiers.
+Le jour où A fait 3x : ce que rapporte, pour 1 $, le fait de vendre A et d'acheter B (ou une pièce quelconque), en richesse finale, frais de la vente et de l'achat déduits : (1 + r_B)(1 − coût)² − (1 + r_A). La moyenne est l'écart d'espérance de richesse ; la médiane dit ce qui arrive le plus souvent. IC 95 % par bootstrap en tirant des mois entiers.
 
 | horizon | on achète | rotations | gain moyen | IC 95 % bas | IC 95 % haut | gain médian | la rotation gagne |
 |---|---|---|---|---|---|---|---|
-| 30 j | rotation vers B (bas de fourchette) | 45 | +70,4 % | +17,7 % | +179,4 % | +14,9 % | 60 % |
-| 30 j | rotation vers une pièce quelconque | 45 | +80,3 % | +32,1 % | +179,3 % | +31,1 % | 73 % |
-| 60 j | rotation vers B (bas de fourchette) | 43 | +146,1 % | −6,4 % | +523,5 % | −10,4 % | 49 % |
-| 60 j | rotation vers une pièce quelconque | 43 | +165,8 % | +22,7 % | +500,6 % | +25,1 % | 70 % |
+| 30 j | rotation vers B (bas de fourchette) | 45 | −8,3 % | −54,0 % | +23,4 % | +9,0 % | 60 % |
+| 30 j | rotation vers une pièce quelconque | 45 | +0,3 % | −45,6 % | +30,3 % | +24,1 % | 73 % |
+| 60 j | rotation vers B (bas de fourchette) | 43 | −38,0 % | −117,6 % | +6,7 % | −5,8 % | 49 % |
+| 60 j | rotation vers une pièce quelconque | 43 | −18,9 % | −98,9 % | +23,5 % | +22,4 % | 70 % |
 
 ## 4. Les pièces en retard rattrapent-elles ?
 
@@ -91,7 +91,7 @@ Corrélation de rang (Spearman), jour par jour, entre un signal et le rendement 
 | panier équipondéré (30 tranches, rééquilibrage mensuel) | 0,71 × | −12 % | 108 % | 0,42 | −88 % | — |
 
 * Rotations effectuées : 17/03/2024 : 1000PEPE (6,4 × son plus bas de 30 j) → 1000RATS ; 06/11/2025 : 1000RATS (3,2 × son plus bas de 30 j) → BROCCOLIF3B. Le multiple final tient à ces décisions et aux deux achats de départ.
-* Placebos (mêmes achats de départ et mêmes déclenchements, pièce achetée au hasard) : multiple médian 0,49 ×, 5–95 % 0,09 × – 2,69 × ; la règle (0,42 ×) fait mieux que 42 % d'entre eux.
+* Placebos (mêmes achats de départ et mêmes déclenchements, pièce achetée au hasard) : multiple médian 0,49 ×, 5–95 % 0,090 × – 2,69 × ; la règle (0,42 ×) fait mieux que 42 % d'entre eux.
 * Départs mensuels tenus 12 mois (21 fenêtres qui se chevauchent à 11 mois sur 12, soit environ 2,7 années indépendantes) : contre le détenteur, 9 gagnées, 6 perdues, 6 égalités (aucune rotation) ; test de signe sur les cas tranchés p = 0,61. Contre le panier : 4 gagnées, 17 perdues. La rotation inverse bat la règle dans 8 fenêtres et perd dans 7.
 * Sur les 30 derniers jours (l'auteur parle de ses propres 30 derniers jours, publiés la veille de cette étude) : rotation 1,21 × ; détenteur 1,16 × ; rotation inverse 1,07 × ; panier équipondéré 1,20 ×.
 
@@ -128,7 +128,7 @@ Le cas le plus favorable à l'auteur (F2, community coins, 2 pièces) enchaîne 
 
 * 432 réglages (`grille_variantes.csv`) : 51 ne tournent jamais (ce sont des détentions, exclues). Parmi les 381 autres, 23 font mieux que le détenteur aux mêmes achats et 127 mieux que le panier.
 * Meilleur réglage qui tourne : range_top mult=3 range=30 bottom=0.1 k=5, 2,61 × contre 0,97 × pour son détenteur. Sharpe dégonflé (Bailey et López de Prado, Sharpe **par jour** de l'écart au détenteur, 259 séries distinctes) : **0,46**, sous le seuil de 0,95.
-* Walk-forward : sur 20/01/2024 – 23/05/2025, 1 réglages qui tournent sont à égalité en tête (même série de rendements). Sur la 2e moitié, ils font en médiane 0,23 ×, contre 0,33 × pour leurs détenteurs et 0,48 × pour le panier ; 0 % battent leur détenteur (`walk_forward.csv`).
+* Walk-forward : sur 20/01/2024 – 23/05/2025, on retient le meilleur réglage qui tourne (range mult=2 range=60 bottom=0.3 k=1). Sur la 2e moitié : 0,23 × (médiane), contre 0,33 × pour le détenteur aux mêmes achats et 0,48 × pour le panier (`walk_forward.csv`).
 
 ## 8. Rotation systématique
 
@@ -136,9 +136,9 @@ Tous les 7 ou 30 jours, détenir à parts égales les k pièces les plus basses 
 
 | fréquence | pièces | bas de fourchette | haut de fourchette | au hasard (médiane) | panier | bas − panier, par an | IC bas | IC haut |
 |---|---|---|---|---|---|---|---|---|
-| hebdomadaire | 2 | 0,00 × | 2,42 × | 0,06 × | 0,71 × | −85 % | −94 % | −65 % |
-| hebdomadaire | 5 | 0,04 × | 0,84 × | 0,10 × | 0,71 × | −67 % | −81 % | −44 % |
-| mensuelle | 2 | 0,04 × | 3,86 × | 0,54 × | 0,71 × | −66 % | −82 % | −39 % |
+| hebdomadaire | 2 | 0,0042 × | 2,42 × | 0,062 × | 0,71 × | −85 % | −94 % | −65 % |
+| hebdomadaire | 5 | 0,036 × | 0,84 × | 0,099 × | 0,71 × | −67 % | −81 % | −44 % |
+| mensuelle | 2 | 0,038 × | 3,86 × | 0,54 × | 0,71 × | −66 % | −82 % | −39 % |
 | mensuelle | 5 | 0,21 × | 2,52 × | 0,56 × | 0,71 × | −37 % | −56 % | −9 % |
 
 ## 9. Robustesse et régimes
@@ -153,7 +153,7 @@ Tous les 7 ou 30 jours, détenir à parts égales les k pièces les plus basses 
 | volume médian ≥ 10 M$ | 0,62 × | 1,92 × | 0,45 × | −97 % | 2 |
 | volume médian ≥ 20 M$ | 0,62 × | 1,92 × | 0,42 × | −97 % | 2 |
 | volume médian ≥ 50 M$ | 0,35 × | 1,92 × | 0,31 × | −97 % | 2 |
-| k = 1 pièce — aucune rotation : non informatif | 0,03 × | 0,03 × | 0,71 × | −99 % | 0 |
+| k = 1 pièce — aucune rotation : non informatif | 0,026 × | 0,026 × | 0,71 × | −99 % | 0 |
 | k = 3 pièces | 0,32 × | 1,56 × | 0,71 × | −98 % | 3 |
 | seuil 2x au lieu de 3x | 0,55 × | 1,92 × | 0,71 × | −93 % | 5 |
 | univers « community coins » (déjà −70 % puis ×2) — aucune rotation : non informatif | 2,21 × | 2,21 × | 1,02 × | −91 % | 0 |
