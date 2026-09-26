@@ -1,0 +1,10 @@
+étape,secondes
+"1a. marchés, issue, barème (PolymarketClient, cache)",1.0027501583099365
+"1b. prédictions modeles_vs_marche, σ TimesFM, priceToBeat",0.26444482803344727
+1c. TWAP60(S) Binance (agrégats 1 s pm_backtest),0.08479499816894531
+"2a. Binance 1 s (zips journaliers, cache) et EWMA",1.6844244003295898
+2b. juste valeur aux instants de cotation : choix de la demi-vie EWMA (train),14.15392780303955
+3. simulation : relecture du cache parquet (--sim-cache),1.0906732082366943
+"4. analyse : expansion, P&L, bootstrap",20.21687912940979
+5. figures,1.7018535137176514
+total,41.25265455245972

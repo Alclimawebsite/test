@@ -1,0 +1,14 @@
+étape,secondes
+"1a. Binance 1m (tradebot.data, cache 1 an)",1.8
+1b. origines : runs TimesFM existants + fenêtres Polymarket BTC,0.0
+"3a. test 1 : cibles, volatilités réalisées (λ sur l'apprentissage), encompassing",27.3
+3b. test 1 : scores hors échantillon + bootstrap par créneau,1.3
+"4a. marchés BTC 5m/15m (list_updown_markets, cache) + prévisions modeles_vs_marche",1.7
+4b. eventMetadata (priceToBeat / finalPrice ; caches diag + gamma),0.6
+"4c. prix du jeton Up à S+k (prices_history, cache)",21.7
+"4d. Binance : TWAP60(S) (agrégats 1s), prix à S+k, EWMA",0.3
+"4e. test 2 : λ de l'EWMA (apprentissage), mélange, empilement, scores",12.0
+5. test 3 : quintiles d'amplitude (bornes sur l'apprentissage),1.6
+6a. sigma_par_marche.csv,0.1
+"6b. CSV, graphiques, README",2.6
+total,71.2
