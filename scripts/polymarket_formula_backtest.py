@@ -806,6 +806,235 @@ def reaction(markets: list, series: dict, H: dict, sig_k: str, k_live: float, ca
 # ---------------------------------------------------------------------------
 # main (partie historique ; carnet réel et README plus bas)
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 5. Graphiques
+# ---------------------------------------------------------------------------
+def _fig(W: float, body_h: float, title: str, sub: str, nrows: int = 1, ncols: int = 1, left: float = 0.08, **kw):
+    plt = _pyplot()
+    t, s_, hh = _header(W, title, sub)
+    H = hh + body_h
+    fig, axes = plt.subplots(nrows, ncols, figsize=(W, H), facecolor=BG, **kw)
+    fig.subplots_adjust(left=left, right=0.97, top=1 - (hh + 0.12) / H, bottom=0.72 / H)
+    _draw_header(fig, t, s_)
+    return fig, axes
+
+
+def fig_calibration(H: dict, path: Path) -> str:
+    cal = H["calibration"]
+    sp = H["scores_phase"]
+    sp = sp[(sp["duree"] == "tous") & (sp["periode"] == "2e moitié")].set_index(["variante", "phase"])["pente_calibration"]
+    sl_b = [sp.loc[("brute", p)] for p in (2, 3, 4)]
+    sl_c = [sp.loc[("corrigée", p)] for p in (2, 3, 4)]
+    title = (f"Brute, la formule est trop sûre d'elle (pente de calibration {f_(min(sl_b), 2)} à {f_(max(sl_b), 2)}, 1 = parfait) ; "
+             f"avec σ × {f_(H['k_val'], 2)} et le décalage Chainlink de {H['lag']} s, elle suit la diagonale "
+             f"(pente {f_(min(sl_c), 2)} à {f_(max(sl_c), 2)})")
+    sub = ("Courbe de fiabilité : fréquence réelle de « Up » (issue officielle) par décile de la probabilité annoncée, "
+           "2e moitié (14/09–24/09/2026), BTC 5m + 15m, tous les instants de la phase. Barres : ± 2 erreurs-types binomiales. "
+           f"Brute = formule telle quelle, σ EWMA 1 s (demi-vie {H['hl']} s) ; corrigée = σ × {f_(H['k_val'], 2)}, Binance décalé de "
+           f"{H['lag']} s, bruit de source {f_(H['basis_sd'] * 1e4, 2)} pb (tout choisi sur la 1re moitié).")
+    fig, axes = _fig(12.0, 4.6, title, sub, 1, 3, sharey=True, gridspec_kw={"wspace": 0.08})
+    names = {2: "S−45 … S (TWAP de départ en cours)", 3: "S+2 … E−60 (K connu)", 4: "E−30, E−10 (moyenne finale en cours)"}
+    for ax, ph in zip(axes, (2, 3, 4)):
+        _style_axes(ax, ygrid=True, xgrid=True)
+        ax.plot([0, 1], [0, 1], color=GREY, lw=1.0, ls=(0, (3, 3)))
+        for v, col in (("brute", ORANGE), ("corrigée", BLUE)):
+            c = cal[(cal["duree"] == "tous") & (cal["phase"] == ph) & (cal["variante"] == v)]
+            ax.errorbar(c["p_mean"], c["up_rate"], yerr=2 * c["se"], color=col, lw=1.8, marker="o", ms=4, capsize=0,
+                        elinewidth=1.0, label=v)
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.set_title(names[ph], color=TEXT, fontsize=9.5, loc="left")
+        ax.set_xlabel("P(Up) annoncée (moyenne du décile)", color=TEXT_2, fontsize=9)
+    axes[0].set_ylabel("fréquence réelle de Up", color=TEXT_2, fontsize=9)
+    axes[0].legend(loc="upper left", frameon=False, fontsize=9, labelcolor=TEXT)
+    _save(fig, path)
+    return title
+
+
+def fig_brier(H: dict, path: Path) -> str:
+    sc = H["scores"]
+    sc = sc[sc["duree"] == "tous"].set_index(["variante", "instant"])
+    st = H["stack"].set_index(["variante", "instant"])
+    x = np.arange(len(LABELS))
+    worse = [lab for lab in LABELS if sc.loc[("corrigée", lab), "d_brier_lo"] > 0]
+    better = [lab for lab in LABELS if sc.loc[("corrigée", lab), "d_brier_hi"] < 0]
+    title = (f"Au même instant, la formule ne prévoit pas mieux que le prix des trades : écart de Brier nul avant S, "
+             f"significativement en faveur du marché à {', '.join(PRETTY[l_] for l_ in worse)}"
+             + (f", en faveur de la formule à {', '.join(PRETTY[l_] for l_ in better)}" if better else "")
+             + " ; l'empilement formule + marché ne gagne presque rien")
+    sub = ("Brier(formule) − Brier(marché) × 1 000 (négatif = la formule fait mieux), 2e moitié (14/09–24/09), BTC 5m + 15m ; "
+           "marché = dernier trade preneur (jeton Up, ou 1 − prix du Down) horodaté ≤ t. IC 95 % bootstrap groupé par créneau de 15 min. "
+           "Empilement : logistique sur logit(formule corrigée) et logit(marché), apprise sur la 1re moitié.")
+    fig, ax = _fig(12.0, 4.4, title, sub)
+    _style_axes(ax)
+    ax.axhline(0, color=TEXT_2, lw=1.0)
+    for off, (v, col, lab) in zip((-0.22, 0.0, 0.22), (("brute", ORANGE, "formule brute"), ("corrigée", BLUE, "formule corrigée"),
+                                                        ("stack", AQUA, "empilement formule + marché"))):
+        if v == "stack":
+            e = np.array([st.loc[("corrigée", l_), "d_brier_emp_marche"] for l_ in LABELS])
+            lo = np.array([st.loc[("corrigée", l_), "lo"] for l_ in LABELS])
+            hi = np.array([st.loc[("corrigée", l_), "hi"] for l_ in LABELS])
+        else:
+            e = np.array([sc.loc[(v, l_), "d_brier"] for l_ in LABELS])
+            lo = np.array([sc.loc[(v, l_), "d_brier_lo"] for l_ in LABELS])
+            hi = np.array([sc.loc[(v, l_), "d_brier_hi"] for l_ in LABELS])
+        ax.errorbar(x + off, 1e3 * e, yerr=[1e3 * (e - lo), 1e3 * (hi - e)], fmt="o", color=col, ms=4.5, elinewidth=1.4,
+                    capsize=0, label=lab)
+    ax.set_xticks(x)
+    ax.set_xticklabels([PRETTY[l_] for l_ in LABELS], fontsize=8.5)
+    ax.set_ylabel("écart de Brier × 1 000", color=TEXT_2, fontsize=9)
+    ax.set_xlabel("instant de décision (S = ouverture, E = clôture)", color=TEXT_2, fontsize=9)
+    ax.legend(loc="upper left", frameon=False, fontsize=9, labelcolor=TEXT)
+    _save(fig, path)
+    return title
+
+
+def fig_pnl_latency(H: dict, lag_block: float, path: Path) -> str:
+    pn = H["pnl"]
+    g = pn[(pn["groupe"] == "tous les instants") & (pn["delta_s"] >= 0)]
+    c = g[g["variante"] == "corrigée"].set_index("delta_s")
+    b = g[g["variante"] == "brute"].set_index("delta_s")
+    title = (f"On ne gagne qu'en achetant au prix d'avant la décision : formule corrigée {c_(c.loc[0, 'pnl_par_part'])} par part "
+             f"au premier trade horodaté ≥ t (apparié ≈ {f_(lag_block, 1)} s plus tôt), {c_(c.loc[2, 'pnl_par_part'])} "
+             f"(IC {c_(c.loc[2, 'lo'])} ; {c_(c.loc[2, 'hi'])}) à δ = 2 s, soit une exécution à t, négatif au-delà")
+    sub = ("P&L par part (issue officielle − prix payé − frais 0,07·p·(1 − p)), 2e moitié (14/09–24/09), BTC 5m + 15m, tous instants ; "
+           "achat si P − coût(ask estimé à t) > marge (choisie sur la 1re moitié : "
+           f"{c_(H['margins']['corrigée'], 0)} corrigée, {c_(H['margins']['brute'], 0)} brute) ; prix = 1er achat preneur du même jeton dont le bloc est "
+           f"dans [t + δ, t + δ + 2 s]. Les blocs arrivent ≈ {f_(lag_block, 1)} s après l'appariement : δ = 2 s ≈ latence réelle nulle. "
+           "Bande : IC 95 % bootstrap groupé par créneau de 15 min.")
+    fig, ax = _fig(11.0, 4.4, title, sub)
+    _style_axes(ax)
+    ax.axhline(0, color=TEXT_2, lw=1.0)
+    for d_, col, lab in ((c, BLUE, "formule corrigée"), (b, ORANGE, "formule brute")):
+        xs = d_.index.to_numpy(dtype=float)
+        ax.fill_between(xs, 100 * d_["lo"], 100 * d_["hi"], color=col, alpha=0.12, linewidth=0)
+        ax.plot(xs, 100 * d_["pnl_par_part"], color=col, lw=2.0, marker="o", ms=4)
+        ax.text(xs[-1] + 0.15, 100 * d_["pnl_par_part"].iloc[-1], lab, color=TEXT, fontsize=8.5, va="center")
+    ax.axvline(lag_block, color=TEXT_2, lw=0.9, ls=(0, (3, 3)))
+    ax.text(lag_block + 0.08, ax.get_ylim()[1] * 0.92, "exécution à t\n(latence réelle 0)", color=TEXT_2, fontsize=8, va="top")
+    ax.set_xlim(-0.3, 12.2)
+    ax.set_xticks(list(fb.HIST_DELAYS))
+    ax.set_xlabel("δ : délai entre la décision t et le bloc du trade exécuté (s)", color=TEXT_2, fontsize=9)
+    ax.set_ylabel("P&L par part (cents)", color=TEXT_2, fontsize=9)
+    _save(fig, path)
+    return title
+
+
+def fig_pnl_heat(H: dict, path: Path) -> str:
+    pn = H["pnl"]
+    d = pn[(pn["variante"] == "corrigée") & (pn["groupe"].isin(LABELS)) & (pn["delta_s"] >= 0)]
+    val = d.pivot(index="groupe", columns="delta_s", values="pnl_par_part").reindex(LABELS)
+    lo = d.pivot(index="groupe", columns="delta_s", values="lo").reindex(LABELS)
+    hi = d.pivot(index="groupe", columns="delta_s", values="hi").reindex(LABELS)
+    nn = d.pivot(index="groupe", columns="delta_s", values="executees").reindex(LABELS)
+    cells = H["cells"].set_index("variante").loc["corrigée"]
+    title = (f"Par instant, {int(cells['pos'])} cases sur {int(cells['n'])} ont un P&L à IC positif et {int(cells['neg'])} à IC négatif, "
+             f"≈ {f_(0.025 * cells['n'], 0)} attendues de chaque côté par hasard : aucun instant n'est rentable de façon fiable dès δ ≥ 2 s")
+    sub = ("P&L par part (cents), formule corrigée, 2e moitié ; gras = IC 95 % qui exclut 0 (sans correction pour tests multiples) ; "
+           "case vide = moins de 30 positions exécutées. Colonnes : δ (bloc − décision, s).")
+    plt = _pyplot()
+    from matplotlib.colors import LinearSegmentedColormap
+
+    fig, ax = _fig(9.0, 6.4, title, sub, left=0.2)
+    ax.set_facecolor(BG)
+    for sp_ in ax.spines.values():
+        sp_.set_visible(False)
+    cmap = LinearSegmentedColormap.from_list("div", [ORANGE, "#fbe3d8", BG, "#d6e6f8", BLUE])
+    v = 100 * val.to_numpy(dtype=float)
+    v[nn.to_numpy(dtype=float) < 30] = np.nan
+    lim = 15.0
+    ax.imshow(np.clip(v, -lim, lim), cmap=cmap, vmin=-lim, vmax=lim, aspect="auto")
+    for i in range(v.shape[0]):
+        for j in range(v.shape[1]):
+            if not np.isfinite(v[i, j]):
+                continue
+            sig = (lo.iloc[i, j] > 0) or (hi.iloc[i, j] < 0)
+            ax.text(j, i, fmt_number(v[i, j], 1, signed=True), ha="center", va="center", fontsize=8.5, color=TEXT,
+                    fontweight="bold" if sig else "normal")
+    ax.set_xticks(range(v.shape[1]))
+    ax.set_xticklabels([f"δ = {int(c)} s" for c in val.columns], fontsize=8.5, color=TEXT_2)
+    ax.set_yticks(range(v.shape[0]))
+    ax.set_yticklabels([f"{PRETTY[l_]} (n ≈ {n_(nn.loc[l_].max())})" for l_ in LABELS], fontsize=8.5, color=TEXT_2)
+    ax.tick_params(length=0)
+    _save(fig, path)
+    return title
+
+
+def fig_reaction(R: pd.DataFrame, path: Path) -> str:
+    ok = R[~R["censored"]]
+    d = ok["delay_ms"].to_numpy()
+    med = float(np.median(d))
+    q1, q3 = np.quantile(d, [0.25, 0.75])
+    title = (f"Quand Binance fait bouger la formule de plus de 5 points, le milieu du carnet fait la moitié du chemin en "
+             f"{n_(med)} ms (médiane ; quartiles {n_(q1)}–{n_(q3)} ms) ; {fmt_number(R['censored'].mean(), 0, pct=True)} des "
+             "mouvements ne sont jamais suivis")
+    sub = (f"{n_(len(R))} mouvements (|ΔP| > 0,05 en 1 s, formule corrigée sur les trades agrégés Binance à la ms) dans "
+           f"{R['slug'].nunique()} marchés BTC/ETH du 26/09/2026 ; délai = instant où le milieu du carnet a parcouru la moitié de ΔP − "
+           "instant où la formule l'a fait (grille de 20 ms ; négatif = le carnet a bougé avant). Non suivi = pas de réaction dans les 20 s. "
+           "Trait pointillé : 347 ms (OpenMarket, arXiv 2607.26245).")
+    fig, ax = _fig(10.0, 4.2, title, sub)
+    _style_axes(ax)
+    bins = np.arange(-1000, 3050, 50)
+    ax.hist(np.clip(d, -1000, 3000), bins=bins, color=BLUE, edgecolor=BG, linewidth=0.5)
+    ax.axvline(med, color=TEXT, lw=1.2)
+    ax.text(med + 30, ax.get_ylim()[1] * 0.95, f"médiane {n_(med)} ms", color=TEXT, fontsize=8.5, va="top")
+    ax.axvline(347, color=TEXT_2, lw=1.0, ls=(0, (3, 3)))
+    ax.set_xlabel("délai de réaction du carnet (ms ; > 3 000 regroupés à 3 000)", color=TEXT_2, fontsize=9)
+    ax.set_ylabel("nombre de mouvements", color=TEXT_2, fontsize=9)
+    _save(fig, path)
+    return title
+
+
+def fig_live_pnl(LP: pd.DataFrame, path: Path, n_mk: int) -> str:
+    q = LP[LP["qte"] == 10]
+    b = q[q["variante"] == "brute"].set_index("delta_s")
+    c = q[q["variante"] == "corrigée"].set_index("delta_s")
+    title = (f"Sur le carnet réel, même sans latence, acheter quand la formule s'écarte de l'ask perd : "
+             f"{c_(b.loc[0, 'pnl_par_part'])} par part (brute, IC {c_(b.loc[0, 'lo'])} ; {c_(b.loc[0, 'hi'])}), "
+             f"{c_(c.loc[0, 'pnl_par_part'])} (corrigée) ; n petit, rien n'est démontré")
+    sub = (f"P&L par part, 10 parts achetées au meilleur ask réel (carnet reconstruit à la ms) à t + δ, décision à t sur l'ask réel à t "
+           f"(marges de l'historique) ; {int(b['decisions'].iloc[0])} décisions brute / {int(c['decisions'].iloc[0])} corrigée sur "
+           f"{n_mk} marchés BTC/ETH du 26/09/2026. Bande : IC 95 % bootstrap groupé par créneau de 15 min.")
+    fig, ax = _fig(10.0, 4.2, title, sub)
+    _style_axes(ax)
+    ax.axhline(0, color=TEXT_2, lw=1.0)
+    for d_, col, lab in ((c, BLUE, "formule corrigée"), (b, ORANGE, "formule brute")):
+        xs = d_.index.to_numpy(dtype=float)
+        ax.fill_between(xs, 100 * d_["lo"], 100 * d_["hi"], color=col, alpha=0.12, linewidth=0)
+        ax.plot(xs, 100 * d_["pnl_par_part"], color=col, lw=2.0, marker="o", ms=4)
+        ax.text(xs[-1] + 0.08, 100 * d_["pnl_par_part"].iloc[-1], lab, color=TEXT, fontsize=8.5, va="center")
+    ax.set_xscale("symlog", linthresh=0.1)
+    ax.set_xticks(list(fb.LIVE_DELAYS))
+    ax.set_xticklabels([fmt_number(x, 1 if x < 1 else 0) for x in fb.LIVE_DELAYS])
+    ax.set_xlim(-0.01, 7.5)
+    ax.set_xlabel("δ : latence entre la décision et l'exécution au meilleur ask (s)", color=TEXT_2, fontsize=9)
+    ax.set_ylabel("P&L par part (cents)", color=TEXT_2, fontsize=9)
+    _save(fig, path)
+    return title
+
+
+def fig_vr(H: dict, path: Path) -> str:
+    vr = H["vr"]
+    v60 = float(vr.set_index("horizon_s").loc[60, "ratio_variance"])
+    ac1 = float(H["ac"].set_index("retard_s").loc[1, "autocorrelation"])
+    title = (f"Pourquoi la formule brute est trop sûre d'elle : les rendements Binance 1 s sont autocorrélés (+{f_(ac1, 2)} d'une seconde "
+             f"à l'autre), donc la variance sur 1 min vaut {f_(v60, 2)} × la somme des variances 1 s (σ × {f_(math.sqrt(v60), 2)})")
+    sub = ("Ratio de variance Var(r sur h s) / (h · Var(r sur 1 s)), log-closes Binance BTCUSDT 1 s, 1re moitié (04/09–13/09/2026). "
+           f"Une marche aléatoire donnerait 1. Le facteur appris sur la 1re moitié par log-loss vaut {f_(H['k_val'], 2)} pour σ EWMA 1 s.")
+    fig, ax = _fig(9.0, 3.8, title, sub)
+    _style_axes(ax)
+    ax.axhline(1, color=GREY, lw=1.0, ls=(0, (3, 3)))
+    ax.plot(vr["horizon_s"], vr["ratio_variance"], color=BLUE, lw=2.0, marker="o", ms=4)
+    ax.set_xscale("log")
+    ax.set_xticks(vr["horizon_s"])
+    ax.set_xticklabels([str(int(h)) for h in vr["horizon_s"]])
+    ax.set_ylim(0.9, max(1.8, float(vr["ratio_variance"].max()) * 1.05))
+    ax.set_xlabel("horizon h (s)", color=TEXT_2, fontsize=9)
+    ax.set_ylabel("ratio de variance", color=TEXT_2, fontsize=9)
+    _save(fig, path)
+    return title
+
+
 def write_report(H: dict, Lv: dict, rt: Runtime, args) -> None:
     pn = H["pnl"]
     print(H["margins"])
