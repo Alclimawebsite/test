@@ -1,0 +1,6 @@
+controle,n,violations
+trois 5m Up mais 15m Down (impossible),2016,0
+trois 5m Down mais 15m Up (impossible),2016,0
+"V2 ≥ V0, 5m#3 Up mais 15m Down (impossible)",2016,0
+"V2 < V0, 5m#3 Down mais 15m Up (impossible)",2016,0
+issue officielle ≠ comparaison des niveaux de la chaîne,8064,0

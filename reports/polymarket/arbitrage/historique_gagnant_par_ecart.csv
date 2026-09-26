@@ -1,0 +1,7 @@
+ecart_final,marches,marches_gagnant_achete_apres,profit_apres,parts_apres,prix_min_median_apres,marches_gagnant_achete_avant,profit_avant
+"< 0,1 pb",104,73,24891.2,236796,0.97,87,7464.23
+"0,1 – 0,5 pb",419,28,11283.6,54105.8,0.98,41,1592.2
+"0,5 – 1 pb",459,2,3.31659,92.5532,0.96,2,131.528
+1 – 5 pb,2897,16,4139.18,47246.3,0.974,7,140.608
+≥ 5 pb,4164,6,4712.96,42933,0.73,1,5.07943
+Tous,8043,125,45030.3,381174,0.97,138,9333.64

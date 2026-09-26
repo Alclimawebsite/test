@@ -1,0 +1,790 @@
+variante,phase,marge_c_bas,marge_c_haut,secondes
+A,avant S,-60,-59.5,34
+A,avant clôture #1,-60,-59.5,2290
+A,avant clôture #1,-59.5,-59,9
+A,avant clôture #1,-59,-58.5,3
+A,avant clôture #1,-58.5,-58,1
+A,avant clôture #1,-58,-57.5,1
+A,avant clôture #1,-57.5,-57,4
+A,avant clôture #1,-56.5,-56,3
+A,avant clôture #1,-56,-55.5,2
+A,avant clôture #1,-55.5,-55,2
+A,entre #1 et #2,-60,-59.5,29686
+A,entre #1 et #2,-59.5,-59,367
+A,entre #1 et #2,-59,-58.5,322
+A,entre #1 et #2,-58.5,-58,372
+A,entre #1 et #2,-58,-57.5,361
+A,entre #1 et #2,-57.5,-57,485
+A,entre #1 et #2,-57,-56.5,364
+A,entre #1 et #2,-56.5,-56,423
+A,entre #1 et #2,-56,-55.5,450
+A,entre #1 et #2,-55.5,-55,545
+A,entre #1 et #2,-55,-54.5,492
+A,entre #1 et #2,-54.5,-54,581
+A,entre #1 et #2,-54,-53.5,585
+A,entre #1 et #2,-53.5,-53,615
+A,entre #1 et #2,-53,-52.5,604
+A,entre #1 et #2,-52.5,-52,865
+A,entre #1 et #2,-52,-51.5,551
+A,entre #1 et #2,-51.5,-51,791
+A,entre #1 et #2,-51,-50.5,425
+A,entre #1 et #2,-50.5,-50,896
+A,entre #1 et #2,-50,-49.5,463
+A,entre #1 et #2,-49.5,-49,836
+A,entre #1 et #2,-49,-48.5,425
+A,entre #1 et #2,-48.5,-48,746
+A,entre #1 et #2,-48,-47.5,465
+A,entre #1 et #2,-47.5,-47,694
+A,entre #1 et #2,-47,-46.5,564
+A,entre #1 et #2,-46.5,-46,638
+A,entre #1 et #2,-46,-45.5,427
+A,entre #1 et #2,-45.5,-45,510
+A,entre #1 et #2,-45,-44.5,394
+A,entre #1 et #2,-44.5,-44,432
+A,entre #1 et #2,-44,-43.5,432
+A,entre #1 et #2,-43.5,-43,263
+A,entre #1 et #2,-43,-42.5,391
+A,entre #1 et #2,-42.5,-42,256
+A,entre #1 et #2,-42,-41.5,414
+A,entre #1 et #2,-41.5,-41,209
+A,entre #1 et #2,-41,-40.5,354
+A,entre #1 et #2,-40.5,-40,175
+A,entre #1 et #2,-40,-39.5,376
+A,entre #1 et #2,-39.5,-39,210
+A,entre #1 et #2,-39,-38.5,307
+A,entre #1 et #2,-38.5,-38,211
+A,entre #1 et #2,-38,-37.5,274
+A,entre #1 et #2,-37.5,-37,207
+A,entre #1 et #2,-37,-36.5,209
+A,entre #1 et #2,-36.5,-36,197
+A,entre #1 et #2,-36,-35.5,220
+A,entre #1 et #2,-35.5,-35,174
+A,entre #1 et #2,-35,-34.5,213
+A,entre #1 et #2,-34.5,-34,131
+A,entre #1 et #2,-34,-33.5,162
+A,entre #1 et #2,-33.5,-33,186
+A,entre #1 et #2,-33,-32.5,159
+A,entre #1 et #2,-32.5,-32,147
+A,entre #1 et #2,-32,-31.5,73
+A,entre #1 et #2,-31.5,-31,133
+A,entre #1 et #2,-31,-30.5,82
+A,entre #1 et #2,-30.5,-30,146
+A,entre #1 et #2,-30,-29.5,80
+A,entre #1 et #2,-29.5,-29,161
+A,entre #1 et #2,-29,-28.5,68
+A,entre #1 et #2,-28.5,-28,127
+A,entre #1 et #2,-28,-27.5,62
+A,entre #1 et #2,-27.5,-27,128
+A,entre #1 et #2,-27,-26.5,32
+A,entre #1 et #2,-26.5,-26,106
+A,entre #1 et #2,-26,-25.5,32
+A,entre #1 et #2,-25.5,-25,80
+A,entre #1 et #2,-25,-24.5,34
+A,entre #1 et #2,-24.5,-24,66
+A,entre #1 et #2,-24,-23.5,49
+A,entre #1 et #2,-23.5,-23,71
+A,entre #1 et #2,-23,-22.5,41
+A,entre #1 et #2,-22.5,-22,67
+A,entre #1 et #2,-22,-21.5,25
+A,entre #1 et #2,-21.5,-21,43
+A,entre #1 et #2,-21,-20.5,30
+A,entre #1 et #2,-20.5,-20,37
+A,entre #1 et #2,-20,-19.5,24
+A,entre #1 et #2,-19.5,-19,38
+A,entre #1 et #2,-19,-18.5,22
+A,entre #1 et #2,-18.5,-18,48
+A,entre #1 et #2,-18,-17.5,29
+A,entre #1 et #2,-17.5,-17,34
+A,entre #1 et #2,-17,-16.5,22
+A,entre #1 et #2,-16.5,-16,28
+A,entre #1 et #2,-16,-15.5,16
+A,entre #1 et #2,-15.5,-15,21
+A,entre #1 et #2,-15,-14.5,32
+A,entre #1 et #2,-14.5,-14,19
+A,entre #1 et #2,-14,-13.5,20
+A,entre #1 et #2,-13.5,-13,12
+A,entre #1 et #2,-13,-12.5,13
+A,entre #1 et #2,-12.5,-12,18
+A,entre #1 et #2,-12,-11.5,10
+A,entre #1 et #2,-11.5,-11,9
+A,entre #1 et #2,-11,-10.5,9
+A,entre #1 et #2,-10.5,-10,9
+A,entre #1 et #2,-10,-9.5,5
+A,entre #1 et #2,-9.5,-9,10
+A,entre #1 et #2,-9,-8.5,10
+A,entre #1 et #2,-8.5,-8,7
+A,entre #1 et #2,-8,-7.5,2
+A,entre #1 et #2,-7.5,-7,6
+A,entre #1 et #2,-7,-6.5,6
+A,entre #1 et #2,-6.5,-6,3
+A,entre #1 et #2,-6,-5.5,5
+A,entre #1 et #2,-5.5,-5,4
+A,entre #1 et #2,-5,-4.5,2
+A,entre #1 et #2,-4.5,-4,5
+A,entre #1 et #2,-4,-3.5,6
+A,entre #1 et #2,-3.5,-3,4
+A,entre #1 et #2,-3,-2.5,3
+A,entre #1 et #2,-2.5,-2,1
+A,entre #1 et #2,-2,-1.5,2
+A,entre #1 et #2,-1,-0.5,3
+A,entre #1 et #2,-0.5,0,1
+A,après clôture #2,-60,-59.5,45724
+A,après clôture #2,-59.5,-59,1166
+A,après clôture #2,-59,-58.5,836
+A,après clôture #2,-58.5,-58,1174
+A,après clôture #2,-58,-57.5,930
+A,après clôture #2,-57.5,-57,1293
+A,après clôture #2,-57,-56.5,861
+A,après clôture #2,-56.5,-56,1351
+A,après clôture #2,-56,-55.5,1021
+A,après clôture #2,-55.5,-55,1262
+A,après clôture #2,-55,-54.5,1172
+A,après clôture #2,-54.5,-54,1123
+A,après clôture #2,-54,-53.5,1309
+A,après clôture #2,-53.5,-53,1266
+A,après clôture #2,-53,-52.5,1207
+A,après clôture #2,-52.5,-52,1277
+A,après clôture #2,-52,-51.5,1388
+A,après clôture #2,-51.5,-51,1381
+A,après clôture #2,-51,-50.5,1489
+A,après clôture #2,-50.5,-50,1272
+A,après clôture #2,-50,-49.5,1592
+A,après clôture #2,-49.5,-49,1269
+A,après clôture #2,-49,-48.5,1502
+A,après clôture #2,-48.5,-48,1252
+A,après clôture #2,-48,-47.5,1523
+A,après clôture #2,-47.5,-47,1341
+A,après clôture #2,-47,-46.5,1847
+A,après clôture #2,-46.5,-46,1277
+A,après clôture #2,-46,-45.5,1735
+A,après clôture #2,-45.5,-45,1218
+A,après clôture #2,-45,-44.5,1821
+A,après clôture #2,-44.5,-44,1245
+A,après clôture #2,-44,-43.5,1862
+A,après clôture #2,-43.5,-43,1300
+A,après clôture #2,-43,-42.5,1938
+A,après clôture #2,-42.5,-42,1092
+A,après clôture #2,-42,-41.5,2243
+A,après clôture #2,-41.5,-41,1118
+A,après clôture #2,-41,-40.5,2169
+A,après clôture #2,-40.5,-40,1317
+A,après clôture #2,-40,-39.5,2046
+A,après clôture #2,-39.5,-39,1341
+A,après clôture #2,-39,-38.5,2233
+A,après clôture #2,-38.5,-38,1690
+A,après clôture #2,-38,-37.5,2096
+A,après clôture #2,-37.5,-37,1772
+A,après clôture #2,-37,-36.5,2064
+A,après clôture #2,-36.5,-36,1575
+A,après clôture #2,-36,-35.5,2295
+A,après clôture #2,-35.5,-35,1651
+A,après clôture #2,-35,-34.5,2142
+A,après clôture #2,-34.5,-34,1632
+A,après clôture #2,-34,-33.5,2200
+A,après clôture #2,-33.5,-33,1758
+A,après clôture #2,-33,-32.5,2124
+A,après clôture #2,-32.5,-32,1742
+A,après clôture #2,-32,-31.5,2117
+A,après clôture #2,-31.5,-31,1768
+A,après clôture #2,-31,-30.5,2087
+A,après clôture #2,-30.5,-30,1782
+A,après clôture #2,-30,-29.5,2158
+A,après clôture #2,-29.5,-29,1721
+A,après clôture #2,-29,-28.5,1842
+A,après clôture #2,-28.5,-28,2162
+A,après clôture #2,-28,-27.5,1757
+A,après clôture #2,-27.5,-27,2191
+A,après clôture #2,-27,-26.5,1922
+A,après clôture #2,-26.5,-26,2126
+A,après clôture #2,-26,-25.5,1594
+A,après clôture #2,-25.5,-25,2385
+A,après clôture #2,-25,-24.5,1625
+A,après clôture #2,-24.5,-24,2403
+A,après clôture #2,-24,-23.5,1663
+A,après clôture #2,-23.5,-23,2188
+A,après clôture #2,-23,-22.5,1421
+A,après clôture #2,-22.5,-22,2316
+A,après clôture #2,-22,-21.5,1383
+A,après clôture #2,-21.5,-21,2718
+A,après clôture #2,-21,-20.5,1544
+A,après clôture #2,-20.5,-20,2530
+A,après clôture #2,-20,-19.5,1349
+A,après clôture #2,-19.5,-19,2792
+A,après clôture #2,-19,-18.5,1291
+A,après clôture #2,-18.5,-18,2629
+A,après clôture #2,-18,-17.5,1502
+A,après clôture #2,-17.5,-17,2624
+A,après clôture #2,-17,-16.5,1445
+A,après clôture #2,-16.5,-16,2931
+A,après clôture #2,-16,-15.5,1488
+A,après clôture #2,-15.5,-15,2345
+A,après clôture #2,-15,-14.5,1897
+A,après clôture #2,-14.5,-14,2515
+A,après clôture #2,-14,-13.5,1785
+A,après clôture #2,-13.5,-13,2244
+A,après clôture #2,-13,-12.5,2000
+A,après clôture #2,-12.5,-12,2288
+A,après clôture #2,-12,-11.5,1773
+A,après clôture #2,-11.5,-11,2276
+A,après clôture #2,-11,-10.5,2277
+A,après clôture #2,-10.5,-10,2196
+A,après clôture #2,-10,-9.5,2058
+A,après clôture #2,-9.5,-9,2416
+A,après clôture #2,-9,-8.5,2263
+A,après clôture #2,-8.5,-8,2180
+A,après clôture #2,-8,-7.5,2240
+A,après clôture #2,-7.5,-7,2031
+A,après clôture #2,-7,-6.5,2073
+A,après clôture #2,-6.5,-6,1796
+A,après clôture #2,-6,-5.5,1479
+A,après clôture #2,-5.5,-5,2396
+A,après clôture #2,-5,-4.5,1605
+A,après clôture #2,-4.5,-4,2313
+A,après clôture #2,-4,-3.5,1363
+A,après clôture #2,-3.5,-3,2830
+A,après clôture #2,-3,-2.5,1104
+A,après clôture #2,-2.5,-2,2180
+A,après clôture #2,-2,-1.5,879
+A,après clôture #2,-1.5,-1,1503
+A,après clôture #2,-1,-0.5,880
+A,après clôture #2,-0.5,0,891
+A,après clôture #2,0,0.5,187
+A,après clôture #2,0.5,1,219
+A,après clôture #2,1,1.5,33
+A,après clôture #2,1.5,2,39
+A,après clôture #2,2,2.5,24
+A,après clôture #2,2.5,3,13
+A,après clôture #2,3,3.5,8
+A,après clôture #2,3.5,4,10
+A,après clôture #2,4,4.5,5
+A,après clôture #2,4.5,5,11
+A,après clôture #2,5,5.5,4
+A,après clôture #2,5.5,6,6
+A,après clôture #2,6,6.5,6
+A,après clôture #2,6.5,7,1
+A,après clôture #2,7,7.5,1
+A,après clôture #2,7.5,8,4
+A,après clôture #2,8.5,9,2
+A,après clôture #2,9.5,10,4
+A,après clôture #2,10.5,11,1
+A,après clôture #2,13.5,14,4
+A,après clôture #2,14.5,15,1
+A,après clôture #2,15,15.5,1
+A,après clôture #2,16,16.5,6
+A,après clôture #2,16.5,17,2
+A,après clôture #2,18.5,19,4
+A,après clôture #2,19.5,20,2
+B,avant S,-60,-59.5,34
+B,avant clôture #1,-60,-59.5,2646
+B,avant clôture #1,-59.5,-59,2
+B,entre #1 et #2,-60,-59.5,33894
+B,entre #1 et #2,-59.5,-59,506
+B,entre #1 et #2,-59,-58.5,478
+B,entre #1 et #2,-58.5,-58,564
+B,entre #1 et #2,-58,-57.5,480
+B,entre #1 et #2,-57.5,-57,659
+B,entre #1 et #2,-57,-56.5,552
+B,entre #1 et #2,-56.5,-56,699
+B,entre #1 et #2,-56,-55.5,555
+B,entre #1 et #2,-55.5,-55,947
+B,entre #1 et #2,-55,-54.5,571
+B,entre #1 et #2,-54.5,-54,856
+B,entre #1 et #2,-54,-53.5,454
+B,entre #1 et #2,-53.5,-53,979
+B,entre #1 et #2,-53,-52.5,529
+B,entre #1 et #2,-52.5,-52,889
+B,entre #1 et #2,-52,-51.5,462
+B,entre #1 et #2,-51.5,-51,850
+B,entre #1 et #2,-51,-50.5,484
+B,entre #1 et #2,-50.5,-50,758
+B,entre #1 et #2,-50,-49.5,613
+B,entre #1 et #2,-49.5,-49,698
+B,entre #1 et #2,-49,-48.5,518
+B,entre #1 et #2,-48.5,-48,534
+B,entre #1 et #2,-48,-47.5,479
+B,entre #1 et #2,-47.5,-47,473
+B,entre #1 et #2,-47,-46.5,473
+B,entre #1 et #2,-46.5,-46,312
+B,entre #1 et #2,-46,-45.5,443
+B,entre #1 et #2,-45.5,-45,273
+B,entre #1 et #2,-45,-44.5,461
+B,entre #1 et #2,-44.5,-44,235
+B,entre #1 et #2,-44,-43.5,401
+B,entre #1 et #2,-43.5,-43,192
+B,entre #1 et #2,-43,-42.5,428
+B,entre #1 et #2,-42.5,-42,258
+B,entre #1 et #2,-42,-41.5,320
+B,entre #1 et #2,-41.5,-41,251
+B,entre #1 et #2,-41,-40.5,321
+B,entre #1 et #2,-40.5,-40,244
+B,entre #1 et #2,-40,-39.5,233
+B,entre #1 et #2,-39.5,-39,232
+B,entre #1 et #2,-39,-38.5,238
+B,entre #1 et #2,-38.5,-38,240
+B,entre #1 et #2,-38,-37.5,229
+B,entre #1 et #2,-37.5,-37,155
+B,entre #1 et #2,-37,-36.5,182
+B,entre #1 et #2,-36.5,-36,233
+B,entre #1 et #2,-36,-35.5,141
+B,entre #1 et #2,-35.5,-35,165
+B,entre #1 et #2,-35,-34.5,81
+B,entre #1 et #2,-34.5,-34,152
+B,entre #1 et #2,-34,-33.5,104
+B,entre #1 et #2,-33.5,-33,169
+B,entre #1 et #2,-33,-32.5,84
+B,entre #1 et #2,-32.5,-32,182
+B,entre #1 et #2,-32,-31.5,87
+B,entre #1 et #2,-31.5,-31,135
+B,entre #1 et #2,-31,-30.5,69
+B,entre #1 et #2,-30.5,-30,148
+B,entre #1 et #2,-30,-29.5,46
+B,entre #1 et #2,-29.5,-29,123
+B,entre #1 et #2,-29,-28.5,40
+B,entre #1 et #2,-28.5,-28,89
+B,entre #1 et #2,-28,-27.5,38
+B,entre #1 et #2,-27.5,-27,78
+B,entre #1 et #2,-27,-26.5,60
+B,entre #1 et #2,-26.5,-26,84
+B,entre #1 et #2,-26,-25.5,46
+B,entre #1 et #2,-25.5,-25,68
+B,entre #1 et #2,-25,-24.5,50
+B,entre #1 et #2,-24.5,-24,28
+B,entre #1 et #2,-24,-23.5,44
+B,entre #1 et #2,-23.5,-23,39
+B,entre #1 et #2,-23,-22.5,45
+B,entre #1 et #2,-22.5,-22,26
+B,entre #1 et #2,-22,-21.5,54
+B,entre #1 et #2,-21.5,-21,35
+B,entre #1 et #2,-21,-20.5,38
+B,entre #1 et #2,-20.5,-20,31
+B,entre #1 et #2,-20,-19.5,32
+B,entre #1 et #2,-19.5,-19,24
+B,entre #1 et #2,-19,-18.5,25
+B,entre #1 et #2,-18.5,-18,20
+B,entre #1 et #2,-18,-17.5,42
+B,entre #1 et #2,-17.5,-17,22
+B,entre #1 et #2,-17,-16.5,23
+B,entre #1 et #2,-16.5,-16,15
+B,entre #1 et #2,-16,-15.5,22
+B,entre #1 et #2,-15.5,-15,21
+B,entre #1 et #2,-15,-14.5,10
+B,entre #1 et #2,-14.5,-14,9
+B,entre #1 et #2,-14,-13.5,13
+B,entre #1 et #2,-13.5,-13,15
+B,entre #1 et #2,-13,-12.5,1
+B,entre #1 et #2,-12.5,-12,12
+B,entre #1 et #2,-12,-11.5,14
+B,entre #1 et #2,-11.5,-11,4
+B,entre #1 et #2,-11,-10.5,2
+B,entre #1 et #2,-10.5,-10,9
+B,entre #1 et #2,-10,-9.5,6
+B,entre #1 et #2,-9.5,-9,3
+B,entre #1 et #2,-9,-8.5,5
+B,entre #1 et #2,-8.5,-8,4
+B,entre #1 et #2,-8,-7.5,4
+B,entre #1 et #2,-7.5,-7,3
+B,entre #1 et #2,-7,-6.5,6
+B,entre #1 et #2,-6.5,-6,4
+B,entre #1 et #2,-6,-5.5,3
+B,entre #1 et #2,-5.5,-5,2
+B,entre #1 et #2,-5,-4.5,4
+B,entre #1 et #2,-4,-3.5,4
+B,après clôture #2,-60,-59.5,43268
+B,après clôture #2,-59.5,-59,1196
+B,après clôture #2,-59,-58.5,976
+B,après clôture #2,-58.5,-58,1250
+B,après clôture #2,-58,-57.5,957
+B,après clôture #2,-57.5,-57,1457
+B,après clôture #2,-57,-56.5,837
+B,après clôture #2,-56.5,-56,1445
+B,après clôture #2,-56,-55.5,1051
+B,après clôture #2,-55.5,-55,1409
+B,après clôture #2,-55,-54.5,1191
+B,après clôture #2,-54.5,-54,1333
+B,après clôture #2,-54,-53.5,1364
+B,après clôture #2,-53.5,-53,1511
+B,après clôture #2,-53,-52.5,1422
+B,après clôture #2,-52.5,-52,1314
+B,après clôture #2,-52,-51.5,1640
+B,après clôture #2,-51.5,-51,1388
+B,après clôture #2,-51,-50.5,1511
+B,après clôture #2,-50.5,-50,1330
+B,après clôture #2,-50,-49.5,1650
+B,après clôture #2,-49.5,-49,1371
+B,après clôture #2,-49,-48.5,1809
+B,après clôture #2,-48.5,-48,1471
+B,après clôture #2,-48,-47.5,1732
+B,après clôture #2,-47.5,-47,1310
+B,après clôture #2,-47,-46.5,1913
+B,après clôture #2,-46.5,-46,1318
+B,après clôture #2,-46,-45.5,1868
+B,après clôture #2,-45.5,-45,1380
+B,après clôture #2,-45,-44.5,2034
+B,après clôture #2,-44.5,-44,1325
+B,après clôture #2,-44,-43.5,2152
+B,après clôture #2,-43.5,-43,1346
+B,après clôture #2,-43,-42.5,2036
+B,après clôture #2,-42.5,-42,1260
+B,après clôture #2,-42,-41.5,2296
+B,après clôture #2,-41.5,-41,1218
+B,après clôture #2,-41,-40.5,2424
+B,après clôture #2,-40.5,-40,1639
+B,après clôture #2,-40,-39.5,2293
+B,après clôture #2,-39.5,-39,1644
+B,après clôture #2,-39,-38.5,2382
+B,après clôture #2,-38.5,-38,1716
+B,après clôture #2,-38,-37.5,2284
+B,après clôture #2,-37.5,-37,1785
+B,après clôture #2,-37,-36.5,2191
+B,après clôture #2,-36.5,-36,1623
+B,après clôture #2,-36,-35.5,2430
+B,après clôture #2,-35.5,-35,1861
+B,après clôture #2,-35,-34.5,2314
+B,après clôture #2,-34.5,-34,1842
+B,après clôture #2,-34,-33.5,2251
+B,après clôture #2,-33.5,-33,1945
+B,après clôture #2,-33,-32.5,2159
+B,après clôture #2,-32.5,-32,1950
+B,après clôture #2,-32,-31.5,2036
+B,après clôture #2,-31.5,-31,1845
+B,après clôture #2,-31,-30.5,2221
+B,après clôture #2,-30.5,-30,1927
+B,après clôture #2,-30,-29.5,2207
+B,après clôture #2,-29.5,-29,2026
+B,après clôture #2,-29,-28.5,2007
+B,après clôture #2,-28.5,-28,2137
+B,après clôture #2,-28,-27.5,1949
+B,après clôture #2,-27.5,-27,2058
+B,après clôture #2,-27,-26.5,1961
+B,après clôture #2,-26.5,-26,2311
+B,après clôture #2,-26,-25.5,1755
+B,après clôture #2,-25.5,-25,2310
+B,après clôture #2,-25,-24.5,1684
+B,après clôture #2,-24.5,-24,2182
+B,après clôture #2,-24,-23.5,1688
+B,après clôture #2,-23.5,-23,2584
+B,après clôture #2,-23,-22.5,1456
+B,après clôture #2,-22.5,-22,2588
+B,après clôture #2,-22,-21.5,1486
+B,après clôture #2,-21.5,-21,2596
+B,après clôture #2,-21,-20.5,1584
+B,après clôture #2,-20.5,-20,2572
+B,après clôture #2,-20,-19.5,1546
+B,après clôture #2,-19.5,-19,2699
+B,après clôture #2,-19,-18.5,1512
+B,après clôture #2,-18.5,-18,2807
+B,après clôture #2,-18,-17.5,1498
+B,après clôture #2,-17.5,-17,2874
+B,après clôture #2,-17,-16.5,1564
+B,après clôture #2,-16.5,-16,2922
+B,après clôture #2,-16,-15.5,1581
+B,après clôture #2,-15.5,-15,2554
+B,après clôture #2,-15,-14.5,1889
+B,après clôture #2,-14.5,-14,2774
+B,après clôture #2,-14,-13.5,1551
+B,après clôture #2,-13.5,-13,2608
+B,après clôture #2,-13,-12.5,1881
+B,après clôture #2,-12.5,-12,2602
+B,après clôture #2,-12,-11.5,1803
+B,après clôture #2,-11.5,-11,2469
+B,après clôture #2,-11,-10.5,2190
+B,après clôture #2,-10.5,-10,2470
+B,après clôture #2,-10,-9.5,1814
+B,après clôture #2,-9.5,-9,2316
+B,après clôture #2,-9,-8.5,1681
+B,après clôture #2,-8.5,-8,1930
+B,après clôture #2,-8,-7.5,1749
+B,après clôture #2,-7.5,-7,1831
+B,après clôture #2,-7,-6.5,1807
+B,après clôture #2,-6.5,-6,1590
+B,après clôture #2,-6,-5.5,1519
+B,après clôture #2,-5.5,-5,1754
+B,après clôture #2,-5,-4.5,1282
+B,après clôture #2,-4.5,-4,1391
+B,après clôture #2,-4,-3.5,995
+B,après clôture #2,-3.5,-3,1126
+B,après clôture #2,-3,-2.5,604
+B,après clôture #2,-2.5,-2,572
+B,après clôture #2,-2,-1.5,266
+B,après clôture #2,-1.5,-1,262
+B,après clôture #2,-1,-0.5,46
+B,après clôture #2,-0.5,0,55
+B,après clôture #2,0,0.5,28
+B,après clôture #2,0.5,1,19
+B,après clôture #2,1,1.5,13
+B,après clôture #2,1.5,2,10
+B,après clôture #2,2,2.5,7
+B,après clôture #2,2.5,3,13
+B,après clôture #2,3,3.5,4
+B,après clôture #2,3.5,4,12
+B,après clôture #2,4,4.5,7
+B,après clôture #2,4.5,5,2
+B,après clôture #2,5,5.5,1
+B,après clôture #2,5.5,6,6
+B,après clôture #2,6.5,7,3
+B,après clôture #2,7,7.5,4
+B,après clôture #2,7.5,8,4
+B,après clôture #2,8.5,9,1
+B,après clôture #2,9,9.5,1
+B,après clôture #2,9.5,10,2
+B,après clôture #2,11.5,12,4
+B,après clôture #2,12,12.5,1
+B,après clôture #2,13,13.5,3
+B,après clôture #2,14,14.5,6
+B,après clôture #2,14.5,15,3
+B,après clôture #2,16,16.5,2
+B,après clôture #2,16.5,17,4
+B,après clôture #2,17.5,18,1
+B,après clôture #2,19.5,20,1
+C,avant S,-60,-59.5,2
+C,avant clôture #1,-60,-59.5,394
+C,avant clôture #1,-59.5,-59,2
+C,avant clôture #1,-56,-55.5,1
+C,entre #1 et #2,-60,-59.5,9938
+C,entre #1 et #2,-59.5,-59,145
+C,entre #1 et #2,-59,-58.5,85
+C,entre #1 et #2,-58.5,-58,123
+C,entre #1 et #2,-58,-57.5,109
+C,entre #1 et #2,-57.5,-57,135
+C,entre #1 et #2,-57,-56.5,107
+C,entre #1 et #2,-56.5,-56,119
+C,entre #1 et #2,-56,-55.5,139
+C,entre #1 et #2,-55.5,-55,147
+C,entre #1 et #2,-55,-54.5,140
+C,entre #1 et #2,-54.5,-54,138
+C,entre #1 et #2,-54,-53.5,153
+C,entre #1 et #2,-53.5,-53,171
+C,entre #1 et #2,-53,-52.5,147
+C,entre #1 et #2,-52.5,-52,216
+C,entre #1 et #2,-52,-51.5,149
+C,entre #1 et #2,-51.5,-51,196
+C,entre #1 et #2,-51,-50.5,135
+C,entre #1 et #2,-50.5,-50,210
+C,entre #1 et #2,-50,-49.5,115
+C,entre #1 et #2,-49.5,-49,203
+C,entre #1 et #2,-49,-48.5,111
+C,entre #1 et #2,-48.5,-48,152
+C,entre #1 et #2,-48,-47.5,112
+C,entre #1 et #2,-47.5,-47,162
+C,entre #1 et #2,-47,-46.5,133
+C,entre #1 et #2,-46.5,-46,170
+C,entre #1 et #2,-46,-45.5,95
+C,entre #1 et #2,-45.5,-45,126
+C,entre #1 et #2,-45,-44.5,105
+C,entre #1 et #2,-44.5,-44,97
+C,entre #1 et #2,-44,-43.5,104
+C,entre #1 et #2,-43.5,-43,58
+C,entre #1 et #2,-43,-42.5,123
+C,entre #1 et #2,-42.5,-42,81
+C,entre #1 et #2,-42,-41.5,108
+C,entre #1 et #2,-41.5,-41,65
+C,entre #1 et #2,-41,-40.5,87
+C,entre #1 et #2,-40.5,-40,36
+C,entre #1 et #2,-40,-39.5,98
+C,entre #1 et #2,-39.5,-39,62
+C,entre #1 et #2,-39,-38.5,91
+C,entre #1 et #2,-38.5,-38,50
+C,entre #1 et #2,-38,-37.5,56
+C,entre #1 et #2,-37.5,-37,52
+C,entre #1 et #2,-37,-36.5,73
+C,entre #1 et #2,-36.5,-36,46
+C,entre #1 et #2,-36,-35.5,63
+C,entre #1 et #2,-35.5,-35,47
+C,entre #1 et #2,-35,-34.5,39
+C,entre #1 et #2,-34.5,-34,36
+C,entre #1 et #2,-34,-33.5,30
+C,entre #1 et #2,-33.5,-33,47
+C,entre #1 et #2,-33,-32.5,37
+C,entre #1 et #2,-32.5,-32,44
+C,entre #1 et #2,-32,-31.5,20
+C,entre #1 et #2,-31.5,-31,43
+C,entre #1 et #2,-31,-30.5,33
+C,entre #1 et #2,-30.5,-30,39
+C,entre #1 et #2,-30,-29.5,25
+C,entre #1 et #2,-29.5,-29,43
+C,entre #1 et #2,-29,-28.5,32
+C,entre #1 et #2,-28.5,-28,39
+C,entre #1 et #2,-28,-27.5,17
+C,entre #1 et #2,-27.5,-27,37
+C,entre #1 et #2,-27,-26.5,15
+C,entre #1 et #2,-26.5,-26,37
+C,entre #1 et #2,-26,-25.5,8
+C,entre #1 et #2,-25.5,-25,25
+C,entre #1 et #2,-25,-24.5,9
+C,entre #1 et #2,-24.5,-24,21
+C,entre #1 et #2,-24,-23.5,13
+C,entre #1 et #2,-23.5,-23,29
+C,entre #1 et #2,-23,-22.5,11
+C,entre #1 et #2,-22.5,-22,20
+C,entre #1 et #2,-22,-21.5,12
+C,entre #1 et #2,-21.5,-21,11
+C,entre #1 et #2,-21,-20.5,5
+C,entre #1 et #2,-20.5,-20,11
+C,entre #1 et #2,-20,-19.5,11
+C,entre #1 et #2,-19.5,-19,12
+C,entre #1 et #2,-19,-18.5,10
+C,entre #1 et #2,-18.5,-18,22
+C,entre #1 et #2,-18,-17.5,13
+C,entre #1 et #2,-17.5,-17,9
+C,entre #1 et #2,-17,-16.5,5
+C,entre #1 et #2,-16.5,-16,9
+C,entre #1 et #2,-16,-15.5,5
+C,entre #1 et #2,-15.5,-15,6
+C,entre #1 et #2,-15,-14.5,8
+C,entre #1 et #2,-14.5,-14,3
+C,entre #1 et #2,-14,-13.5,3
+C,entre #1 et #2,-13.5,-13,8
+C,entre #1 et #2,-13,-12.5,6
+C,entre #1 et #2,-12.5,-12,9
+C,entre #1 et #2,-12,-11.5,1
+C,entre #1 et #2,-11.5,-11,4
+C,entre #1 et #2,-11,-10.5,3
+C,entre #1 et #2,-10.5,-10,1
+C,entre #1 et #2,-10,-9.5,4
+C,entre #1 et #2,-9.5,-9,2
+C,entre #1 et #2,-9,-8.5,3
+C,entre #1 et #2,-8,-7.5,3
+C,entre #1 et #2,-7.5,-7,1
+C,entre #1 et #2,-7,-6.5,2
+C,entre #1 et #2,-6.5,-6,1
+C,entre #1 et #2,-6,-5.5,1
+C,entre #1 et #2,-4.5,-4,1
+C,entre #1 et #2,-3.5,-3,1
+C,entre #1 et #2,-3,-2.5,2
+C,entre #1 et #2,-2.5,-2,1
+C,entre #1 et #2,-2,-1.5,1
+C,après clôture #2,-60,-59.5,33149
+C,après clôture #2,-59.5,-59,814
+C,après clôture #2,-59,-58.5,586
+C,après clôture #2,-58.5,-58,870
+C,après clôture #2,-58,-57.5,662
+C,après clôture #2,-57.5,-57,978
+C,après clôture #2,-57,-56.5,574
+C,après clôture #2,-56.5,-56,956
+C,après clôture #2,-56,-55.5,756
+C,après clôture #2,-55.5,-55,854
+C,après clôture #2,-55,-54.5,841
+C,après clôture #2,-54.5,-54,834
+C,après clôture #2,-54,-53.5,935
+C,après clôture #2,-53.5,-53,940
+C,après clôture #2,-53,-52.5,818
+C,après clôture #2,-52.5,-52,938
+C,après clôture #2,-52,-51.5,913
+C,après clôture #2,-51.5,-51,898
+C,après clôture #2,-51,-50.5,1015
+C,après clôture #2,-50.5,-50,896
+C,après clôture #2,-50,-49.5,1127
+C,après clôture #2,-49.5,-49,880
+C,après clôture #2,-49,-48.5,1089
+C,après clôture #2,-48.5,-48,809
+C,après clôture #2,-48,-47.5,1071
+C,après clôture #2,-47.5,-47,875
+C,après clôture #2,-47,-46.5,1239
+C,après clôture #2,-46.5,-46,850
+C,après clôture #2,-46,-45.5,1216
+C,après clôture #2,-45.5,-45,840
+C,après clôture #2,-45,-44.5,1262
+C,après clôture #2,-44.5,-44,859
+C,après clôture #2,-44,-43.5,1282
+C,après clôture #2,-43.5,-43,810
+C,après clôture #2,-43,-42.5,1333
+C,après clôture #2,-42.5,-42,697
+C,après clôture #2,-42,-41.5,1486
+C,après clôture #2,-41.5,-41,766
+C,après clôture #2,-41,-40.5,1488
+C,après clôture #2,-40.5,-40,902
+C,après clôture #2,-40,-39.5,1409
+C,après clôture #2,-39.5,-39,943
+C,après clôture #2,-39,-38.5,1504
+C,après clôture #2,-38.5,-38,1119
+C,après clôture #2,-38,-37.5,1463
+C,après clôture #2,-37.5,-37,1134
+C,après clôture #2,-37,-36.5,1390
+C,après clôture #2,-36.5,-36,1084
+C,après clôture #2,-36,-35.5,1503
+C,après clôture #2,-35.5,-35,1148
+C,après clôture #2,-35,-34.5,1485
+C,après clôture #2,-34.5,-34,1161
+C,après clôture #2,-34,-33.5,1484
+C,après clôture #2,-33.5,-33,1226
+C,après clôture #2,-33,-32.5,1498
+C,après clôture #2,-32.5,-32,1246
+C,après clôture #2,-32,-31.5,1372
+C,après clôture #2,-31.5,-31,1207
+C,après clôture #2,-31,-30.5,1490
+C,après clôture #2,-30.5,-30,1191
+C,après clôture #2,-30,-29.5,1392
+C,après clôture #2,-29.5,-29,1236
+C,après clôture #2,-29,-28.5,1252
+C,après clôture #2,-28.5,-28,1446
+C,après clôture #2,-28,-27.5,1248
+C,après clôture #2,-27.5,-27,1432
+C,après clôture #2,-27,-26.5,1279
+C,après clôture #2,-26.5,-26,1577
+C,après clôture #2,-26,-25.5,1136
+C,après clôture #2,-25.5,-25,1619
+C,après clôture #2,-25,-24.5,1149
+C,après clôture #2,-24.5,-24,1499
+C,après clôture #2,-24,-23.5,1150
+C,après clôture #2,-23.5,-23,1491
+C,après clôture #2,-23,-22.5,936
+C,après clôture #2,-22.5,-22,1632
+C,après clôture #2,-22,-21.5,1039
+C,après clôture #2,-21.5,-21,1765
+C,après clôture #2,-21,-20.5,1051
+C,après clôture #2,-20.5,-20,1784
+C,après clôture #2,-20,-19.5,922
+C,après clôture #2,-19.5,-19,1848
+C,après clôture #2,-19,-18.5,919
+C,après clôture #2,-18.5,-18,1702
+C,après clôture #2,-18,-17.5,1013
+C,après clôture #2,-17.5,-17,1731
+C,après clôture #2,-17,-16.5,977
+C,après clôture #2,-16.5,-16,1954
+C,après clôture #2,-16,-15.5,976
+C,après clôture #2,-15.5,-15,1590
+C,après clôture #2,-15,-14.5,1228
+C,après clôture #2,-14.5,-14,1674
+C,après clôture #2,-14,-13.5,1160
+C,après clôture #2,-13.5,-13,1524
+C,après clôture #2,-13,-12.5,1320
+C,après clôture #2,-12.5,-12,1601
+C,après clôture #2,-12,-11.5,1144
+C,après clôture #2,-11.5,-11,1515
+C,après clôture #2,-11,-10.5,1539
+C,après clôture #2,-10.5,-10,1526
+C,après clôture #2,-10,-9.5,1405
+C,après clôture #2,-9.5,-9,1710
+C,après clôture #2,-9,-8.5,1544
+C,après clôture #2,-8.5,-8,1460
+C,après clôture #2,-8,-7.5,1430
+C,après clôture #2,-7.5,-7,1269
+C,après clôture #2,-7,-6.5,1243
+C,après clôture #2,-6.5,-6,1164
+C,après clôture #2,-6,-5.5,949
+C,après clôture #2,-5.5,-5,1401
+C,après clôture #2,-5,-4.5,998
+C,après clôture #2,-4.5,-4,1288
+C,après clôture #2,-4,-3.5,837
+C,après clôture #2,-3.5,-3,1448
+C,après clôture #2,-3,-2.5,657
+C,après clôture #2,-2.5,-2,1061
+C,après clôture #2,-2,-1.5,502
+C,après clôture #2,-1.5,-1,675
+C,après clôture #2,-1,-0.5,357
+C,après clôture #2,-0.5,0,363
+C,après clôture #2,0,0.5,76
+C,après clôture #2,0.5,1,74
+C,après clôture #2,1,1.5,2
+C,après clôture #2,1.5,2,11
+C,après clôture #2,2,2.5,6
+C,après clôture #2,2.5,3,2
+C,après clôture #2,3,3.5,4
+C,après clôture #2,3.5,4,6
+C,après clôture #2,4.5,5,4
+C,après clôture #2,5,5.5,2
+C,après clôture #2,7.5,8,2
+C,après clôture #2,8,8.5,1
+C,après clôture #2,9,9.5,2
+C,après clôture #2,10.5,11,1
+C,après clôture #2,14.5,15,1

@@ -1,0 +1,4 @@
+variante,prix_estime,fenetres,fenetres_gt_0,fenetres_gt_1c,fenetres_gt_2c,episodes,episodes_apres_cloture_2,marge_mediane,duree_mediane_s,duree_p90_s,duree_max_s,part_meme_bloc,profit_10,profit_10_sans_limite,profit_50,profit_50_sans_limite,profit_100,profit_100_sans_limite,part_up_down_lt_1,part_up_down_cout_lt_1
+A,dernier achat < 5 s,2011,115,69,45,279,279,0.00675,2,4,8,0.759857,42.9274,56.5646,85.8604,282.823,102.097,565.646,0.140795,0.0207277
+B,"dernier achat < 5 s, + 1 c",2011,53,35,26,82,82,0.0197406,2,3,14,0.695122,26.9342,35.0392,44.7083,175.196,46.4525,350.392,0.0289668,0.00663722
+C,prix max du dernier bloc < 2 s,2011,58,19,12,109,109,0.005275,2,2.2,8,0.816514,9.55477,11.1746,30.508,55.873,43.3347,111.746,0.0425835,0.00400051

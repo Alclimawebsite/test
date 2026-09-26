@@ -25,12 +25,17 @@ Chaîne de calcul (tout en secondes flottantes sur l'horloge locale, sauf mentio
    retard de Chainlink sur Binance (``lag_s``) se traite en changeant d'horloge : le point Chainlink
    d'horodatage ``s`` vaut Binance à ``s − lag`` ; l'information disponible à ``t`` (Binance) est celle
    de l'instant Chainlink ``τ = t + lag``.
-3. :class:`BookTimeline` : meilleurs bid/ask (repère Up) et tailles après **chaque** événement de
-   carnet, horodatés à la réception locale ; côté Down : ask = 1 − bid Up.
-4. :func:`reaction_events` : délai de réaction du milieu du carnet aux sauts de la formule.
+3. :class:`BookTimeline` : meilleurs bid/ask (repère Up) et tailles après chaque événement de carnet
+   (messages de même horodatage serveur regroupés), horodatés à la réception locale ; côté Down :
+   ask = 1 − bid Up.
+4. :func:`reaction_events` : délai de réaction du carnet aux sauts de la formule (1re retouche du
+   meilleur prix, 50 % et 90 % du saut parcourus par le milieu, placebo).
 5. :func:`find_opportunities` : prix périmés (P − coût preneur > marge), durée de vie de chaque
-   niveau jusqu'à son retrait ; :func:`simulate_fills` : exécution à t + ℓ ; :func:`pnl_curve`,
-   :func:`bootstrap_by_group`, :func:`breakeven_latency` : P&L selon ℓ et latence critique ℓ*.
+   niveau jusqu'à son retrait, origine (saut Binance / désaccord persistant / nouvel ask) ;
+   :func:`removal_cause` : retiré par un preneur ou annulé ; :func:`simulate_fills` : exécution à
+   t + ℓ ; :func:`pnl_curve`, :func:`bootstrap_by_group`, :func:`breakeven_latency` (option
+   isotone), :func:`last_significant_latency` : P&L selon ℓ, latence critique ℓ* et gain démontré.
+6. :func:`lag_scan` : retard de Chainlink sur Binance (corrélation des rendements selon le décalage).
 
 Lecture seule, simulation papier. Polymarket est bloqué en France (ANJ) : rien ici n'est utilisable pour
 trader depuis la France.
@@ -51,15 +56,16 @@ from scipy.signal import lfilter
 from scipy.special import ndtr
 
 from tradebot.config import CACHE_DIR
-from tradebot.polymarket_book import DOWN, UP, LiveMarket, _iter_lines, apply_event, consumed_level, Book
+from tradebot.polymarket_book import Book, LiveMarket, _iter_lines, apply_event, consumed_level
 
 __all__ = [
     "CEX_DIR", "LATENCIES_MS", "FEE_RATE", "MAX_SHARES", "MARGINS",
     "cex_files", "load_binance", "load_coinbase", "load_rtds",
     "PriceSeries", "asof_index", "asof_values", "seconds_asof", "twap_1s", "ewma_var_1s", "SigmaSeries",
     "TwapFormula", "BookTimeline", "book_timeline", "trades_up_frame", "ladders_at",
-    "taker_cost", "side_prices", "reaction_events", "find_opportunities", "simulate_fills",
-    "pnl_curve", "bootstrap_by_group", "breakeven_latency", "lag_scan", "summarize_latency",
+    "taker_cost", "side_prices", "reaction_events", "find_opportunities", "removal_cause", "simulate_fills",
+    "pnl_curve", "bootstrap_by_group", "breakeven_latency", "isotonic_decreasing", "last_significant_latency",
+    "lag_scan", "summarize_latency",
 ]
 
 CEX_DIR = CACHE_DIR / "cex_ws"
@@ -154,7 +160,8 @@ def load_coinbase(paths: Sequence[Path]) -> dict[str, pd.DataFrame]:
     out = {}
     for prod, r in rows.items():
         df = pd.DataFrame(r, columns=["rx", "time", "price", "bid", "ask"])
-        df["time"] = pd.to_datetime(df["time"], utc=True, format="ISO8601").astype("int64") / 1e9
+        df["time"] = (pd.to_datetime(df["time"], utc=True, format="ISO8601")
+                      - pd.Timestamp(0, tz="UTC")) / pd.Timedelta(seconds=1)
         df["mid"] = (df["bid"] + df["ask"]) / 2.0
         out[prod] = df.sort_values("rx", kind="stable").reset_index(drop=True)
     return out
@@ -165,7 +172,7 @@ def load_rtds(paths: Sequence[Path]) -> dict[str, pd.DataFrame]:
 
     Colonnes : ``rx`` (s), ``ts`` (s, horodatage de l'observation = ``payload.timestamp``),
     ``msg_ts`` (s, horodatage du message RTDS ; NaN pour l'historique), ``value``, ``snapshot``
-    (True = point d'historique envoyé à l'abonnement). Dédoublonné par ``ts`` (première réception).
+    (True = point d'historique envoyé à l'abonnement). Dédoublonné par ``ts`` (mise à jour temps réel préférée).
     """
     rows: dict[str, list] = {}
     for rx, raw in _outer(paths):
@@ -248,17 +255,26 @@ def twap_1s(series: PriceSeries, t_end: int, L: int = L_S, log: bool = False) ->
     return float(np.mean(x) if log else np.mean(np.exp(x)))
 
 
-def ewma_var_1s(x1s: np.ndarray, halflife_s: float = 600.0, min_obs: int = 120) -> np.ndarray:
+def ewma_var_1s(x1s: np.ndarray, halflife_s: float = 600.0, min_obs: int = 120,
+                v_init: float | None = None) -> np.ndarray:
     """Variance EWMA **causale** des rendements 1 s : ``v[k]`` n'utilise que les rendements
-    ``x[j] − x[j−1]``, ``j <= k``. Initialisée par la moyenne des ``min_obs`` premiers carrés ; NaN avant."""
+    ``x[j] − x[j−1]``, ``j <= k``. Initialisée par la moyenne des ``min_obs`` premiers carrés (NaN avant) ;
+    avec ``v_init`` (variance a priori, p. ex. estimée sur l'historique précédent), la récursion part de
+    ``v_init`` dès la seconde 0."""
     x = np.asarray(x1s, dtype="float64")
     v = np.full(x.size, np.nan)
-    if x.size <= min_obs + 1:
-        return v
-    r = np.diff(x)
+    r = np.diff(x) if x.size > 1 else np.array([])
     r = np.where(np.isfinite(r), r, 0.0)
     r2 = r * r
     lam = 0.5 ** (1.0 / halflife_s)
+    if v_init is not None:
+        v[0] = v_init
+        if r2.size:
+            y, _ = lfilter([1.0 - lam], [1.0, -lam], r2, zi=[lam * v_init])
+            v[1:] = y
+        return v
+    if x.size <= min_obs + 1:
+        return v
     v0 = float(np.mean(r2[:min_obs]))
     tail = r2[min_obs:]
     y, _ = lfilter([1.0 - lam], [1.0, -lam], tail, zi=[lam * v0])
@@ -278,10 +294,12 @@ class SigmaSeries:
         return np.sqrt(asof_values(self.secs.astype("float64"), self.var, t))
 
     @classmethod
-    def from_prices(cls, series: PriceSeries, halflife_s: float = 600.0, min_obs: int = 120) -> "SigmaSeries":
+    def from_prices(cls, series: PriceSeries, halflife_s: float = 600.0, min_obs: int = 120,
+                    v_init: float | None = None, factor: float = 1.0) -> "SigmaSeries":
+        """σ EWMA causal × ``factor`` (correction d'échelle : autocorrélation des rendements 1 s)."""
         s0, s1 = int(math.floor(series.t[0])) + 1, int(math.floor(series.t[-1]))
         secs, x = seconds_asof(series, s0, s1)
-        return cls(secs, ewma_var_1s(x, halflife_s, min_obs))
+        return cls(secs, ewma_var_1s(x, halflife_s, min_obs, v_init) * factor ** 2)
 
 
 # ---------------------------------------------------------------------------
@@ -397,9 +415,15 @@ class BookTimeline:
         return asof_values(self.rx, self.mid, t)
 
 
-def book_timeline(market: LiveMarket, t_from: float | None = None, t_to: float | None = None) -> BookTimeline:
+def book_timeline(market: LiveMarket, t_from: float | None = None, t_to: float | None = None,
+                  consolidate: bool = True) -> BookTimeline:
     """Rejoue les événements du marché ; garde l'état après chaque événement de carnet dont la réception
-    tombe dans [t_from, t_to] (s, local). Les états sans instantané reçu sont ignorés."""
+    tombe dans [t_from, t_to] (s, local). Les états sans instantané reçu sont ignorés.
+
+    ``consolidate`` : une opération du CLOB (annulation + nouvel ordre, trade + instantané…) arrive en
+    plusieurs messages de **même horodatage serveur**, à quelques µs d'intervalle ; seuls les états après
+    le dernier message de chaque série consécutive de même ``ts`` sont gardés (les états intermédiaires
+    n'existent pas pour un ordre qui arrive des dizaines de ms plus tard)."""
     rx, ts, bb, ba, bs, as_ = [], [], [], [], [], []
     book = Book()
     lo = -math.inf if t_from is None else t_from * 1e9
@@ -428,7 +452,11 @@ def book_timeline(market: LiveMarket, t_from: float | None = None, t_to: float |
         ts.append(ev[1] / 1e3)
     f = lambda v: np.asarray(v, dtype="float64")  # noqa: E731
     order = np.argsort(f(rx), kind="stable")
-    tl = BookTimeline(f(rx)[order], f(ts)[order], f(bb)[order], f(ba)[order], f(bs)[order], f(as_)[order])
+    cols = [f(v)[order] for v in (rx, ts, bb, ba, bs, as_)]
+    if consolidate and cols[0].size > 1:
+        keep = np.append(cols[1][1:] != cols[1][:-1], True)
+        cols = [c[keep] for c in cols]
+    tl = BookTimeline(*cols)
     tl.trades = trades_up_frame(market)
     return tl
 
@@ -487,12 +515,13 @@ def side_prices(tl: BookTimeline, t) -> dict[str, np.ndarray]:
 # 2. Réaction du carnet aux sauts de la formule
 # ---------------------------------------------------------------------------
 REACTION_COLS = ["t_event", "t_prev", "t0", "dP", "p_prev", "p_event", "mid0", "phase", "delay_first_ms",
-                 "delay_ask_ms", "delay_bid_ms", "delay_50_ms", "delay_90_ms", "censored_50", "censored_90"]
+                 "delay_ask_ms", "delay_bid_ms", "delay_placebo_ms", "delay_50_ms", "delay_90_ms", "censored_50",
+                 "censored_90"]
 
 
 def reaction_events(grid_t: np.ndarray, P: np.ndarray, tl: BookTimeline, prob_at: Callable[[np.ndarray], np.ndarray],
                     price_times: np.ndarray, jump: float = 0.05, window_s: float = 1.0, refractory_s: float = 2.0,
-                    horizon_s: float = 30.0, phase: np.ndarray | None = None) -> pd.DataFrame:
+                    horizon_s: float = 30.0, phase: np.ndarray | None = None, placebo_s: float = 3.0) -> pd.DataFrame:
     """Sauts de P_formule d'au moins ``jump`` en ``window_s`` et délai de réaction du carnet.
 
     Événement : premier point ``k`` de la grille où ``|P[k] − P[k − w]| >= jump`` (puis rien pendant
@@ -534,9 +563,10 @@ def reaction_events(grid_t: np.ndarray, P: np.ndarray, tl: BookTimeline, prob_at
         row = {"t_event": t_ev, "t_prev": t_prev, "t0": t0, "dP": dP, "p_prev": P[k - w], "p_event": P[k],
                "mid0": math.nan, "phase": int(phase[k]) if phase is not None else -1,
                "delay_first_ms": math.nan, "delay_ask_ms": math.nan, "delay_bid_ms": math.nan,
-               "delay_50_ms": math.nan, "delay_90_ms": math.nan, "censored_50": True, "censored_90": True}
+               "delay_placebo_ms": math.nan, "delay_50_ms": math.nan, "delay_90_ms": math.nan, "censored_50": True,
+               "censored_90": True}
         if j_prev >= 0 and np.isfinite(mids[j_prev]):
-            mid0, a0, b0 = mids[j_prev], tl.ask[j_prev], tl.bid[j_prev]
+            mid0 = mids[j_prev]
             row["mid0"] = mid0
             j_end = int(np.searchsorted(tl.rx, t_prev + horizon_s, side="right"))
             seg = slice(j_prev + 1, j_end)
@@ -548,16 +578,32 @@ def reaction_events(grid_t: np.ndarray, P: np.ndarray, tl: BookTimeline, prob_at
                 if h.size:
                     row[f"delay_{key}_ms"] = (rx[h[0]] - t0) * 1e3
                     row[f"censored_{key}"] = False
-            da = sgn * (tl.ask[seg] - a0)
-            db = sgn * (tl.bid[seg] - b0)
-            ha = np.flatnonzero(np.nan_to_num(da, nan=0.0) > 1e-9)
-            hb = np.flatnonzero(np.nan_to_num(db, nan=0.0) > 1e-9)
-            if ha.size:
-                row["delay_ask_ms"] = (rx[ha[0]] - t0) * 1e3
-            if hb.size:
-                row["delay_bid_ms"] = (rx[hb[0]] - t0) * 1e3
-            row["delay_first_ms"] = np.nanmin([row["delay_ask_ms"], row["delay_bid_ms"]]) \
-                if (ha.size or hb.size) else math.nan
+            # 1re retouche dans le sens du saut, depuis t0 et par rapport aux prix affichés à t0
+            j0 = int(tl.idx(t0))
+            if j0 >= 0:
+                j_hi = int(np.searchsorted(tl.rx, t0 + horizon_s, side="right"))
+                s2 = slice(j0 + 1, j_hi)
+                da = sgn * (tl.ask[s2] - tl.ask[j0])
+                db = sgn * (tl.bid[s2] - tl.bid[j0])
+                ha = np.flatnonzero(np.nan_to_num(da, nan=0.0) > 1e-9)
+                hb = np.flatnonzero(np.nan_to_num(db, nan=0.0) > 1e-9)
+                if ha.size:
+                    row["delay_ask_ms"] = (tl.rx[j0 + 1 + ha[0]] - t0) * 1e3
+                if hb.size:
+                    row["delay_bid_ms"] = (tl.rx[j0 + 1 + hb[0]] - t0) * 1e3
+                if ha.size or hb.size:
+                    row["delay_first_ms"] = np.nanmin([row["delay_ask_ms"], row["delay_bid_ms"]])
+            # placebo : même mesure à t0 − placebo_s, arrêtée à t0
+            tp = t0 - placebo_s
+            jp = int(tl.idx(tp))
+            if jp >= 0:
+                j_hi = int(np.searchsorted(tl.rx, t0, side="left"))
+                s3 = slice(jp + 1, j_hi)
+                da = sgn * (tl.ask[s3] - tl.ask[jp])
+                db = sgn * (tl.bid[s3] - tl.bid[jp])
+                h = np.flatnonzero((np.nan_to_num(da, nan=0.0) > 1e-9) | (np.nan_to_num(db, nan=0.0) > 1e-9))
+                if h.size:
+                    row["delay_placebo_ms"] = (tl.rx[jp + 1 + h[0]] - tp) * 1e3
         rows.append(row)
     return pd.DataFrame(rows, columns=REACTION_COLS)
 
@@ -565,13 +611,14 @@ def reaction_events(grid_t: np.ndarray, P: np.ndarray, tl: BookTimeline, prob_at
 # ---------------------------------------------------------------------------
 # 3. Prix périmés : opportunités et durée de vie
 # ---------------------------------------------------------------------------
-OPP_COLS = ["side", "t_start", "ask0", "size0", "p_side", "edge0", "t_end_book", "t_end_edge", "life_book_ms",
-            "life_edge_ms", "censored", "idx"]
+OPP_COLS = ["side", "t_start", "ask0", "size0", "p_side", "edge0", "p_side_1s", "edge_1s", "trigger", "t_end_book",
+            "t_end_edge", "life_book_ms", "life_edge_ms", "censored", "idx"]
 
 
 def find_opportunities(T: np.ndarray, P: np.ndarray, ask_up: np.ndarray, size_up: np.ndarray, ask_dn: np.ndarray,
                        size_dn: np.ndarray, margin: float = 0.0, horizon_s: float = 120.0,
-                       fee_rate: float = FEE_RATE) -> pd.DataFrame:
+                       fee_rate: float = FEE_RATE, lookback_s: float = 1.0, jump: float = 0.01,
+                       ask_range: tuple[float, float] = (0.0, 1.0)) -> pd.DataFrame:
     """Opportunités preneur : ``P_côté(t) − coût(ask_côté(t)) > margin`` sur la chronologie ``T``.
 
     Une opportunité = un **niveau de prix** (côté, ask0) tant qu'il reste dans le carnet : elle commence
@@ -580,16 +627,27 @@ def find_opportunities(T: np.ndarray, P: np.ndarray, ask_up: np.ndarray, size_up
     termine pas). ``t_end_edge`` : premier instant où l'avantage (au meilleur ask courant) repasse sous la
     marge (le prix Binance est revenu, ou le niveau a disparu). Un niveau encore vivant n'ouvre pas de
     nouvelle opportunité. ``censored`` : fin non observée dans ``horizon_s`` ou dans les données.
+
+    ``trigger`` (origine, d'après l'état ``lookback_s`` plus tôt) : ``persistante`` si l'avantage dépassait
+    déjà la marge (au meilleur ask d'alors) ; sinon ``saut`` si P_côté a monté d'au moins ``jump`` (le
+    prix Binance a bougé : prix périmé au sens strict) ; sinon ``carnet`` (un ask moins cher est apparu).
+    ``ask_range`` : seuls les asks dans cet intervalle ouvrent une opportunité (les queues 0,01–0,04 et
+    0,96–0,99 relèvent surtout de l'erreur de modèle).
     """
     T = np.asarray(T, dtype="float64")
     P = np.asarray(P, dtype="float64")
+    jb = np.searchsorted(T, T - lookback_s, side="right") - 1
+    okb = jb >= 0
+    jb = np.maximum(jb, 0)
     rows = []
     for side, ask, size in ((1, ask_up, size_up), (-1, ask_dn, size_dn)):
         ask = np.asarray(ask, dtype="float64")
         size = np.asarray(size, dtype="float64")
         ps = P if side == 1 else 1.0 - P
         edge = ps - taker_cost(ask, fee_rate)
-        on = np.nan_to_num(edge, nan=-1.0) > margin + _EPS
+        ps_b = np.where(okb, ps[jb], np.nan)
+        edge_b = np.where(okb, edge[jb], np.nan)
+        on = (np.nan_to_num(edge, nan=-1.0) > margin + _EPS) & (ask >= ask_range[0] - _EPS) & (ask <= ask_range[1] + _EPS)
         prev_on = np.concatenate([[False], on[:-1]])
         prev_ask = np.concatenate([[np.nan], ask[:-1]])
         cand = np.flatnonzero(on & (~prev_on | (np.abs(ask - prev_ask) > _EPS)))
@@ -606,8 +664,15 @@ def find_opportunities(T: np.ndarray, P: np.ndarray, ask_up: np.ndarray, size_up
             t_end = T[i + 1 + gone[0]] if gone.size else T[min(j_end, T.size) - 1]
             t_edge = T[i + 1 + off[0]] if off.size else t_end
             live[lvl] = t_end if not censored else math.inf
+            if np.nan_to_num(edge_b[i], nan=-1.0) > margin + _EPS:
+                trig = "persistante"
+            elif np.isfinite(ps_b[i]) and ps[i] - ps_b[i] >= jump:
+                trig = "saut"
+            else:
+                trig = "carnet"
             rows.append({"side": "up" if side == 1 else "down", "t_start": T[i], "ask0": lvl, "size0": size[i],
-                         "p_side": ps[i], "edge0": edge[i], "t_end_book": t_end, "t_end_edge": min(t_edge, t_end),
+                         "p_side": ps[i], "edge0": edge[i], "p_side_1s": ps_b[i], "edge_1s": edge_b[i], "trigger": trig,
+                         "t_end_book": t_end, "t_end_edge": min(t_edge, t_end),
                          "life_book_ms": (t_end - T[i]) * 1e3, "life_edge_ms": (min(t_edge, t_end) - T[i]) * 1e3,
                          "censored": bool(censored), "idx": int(i)})
     df = pd.DataFrame(rows, columns=OPP_COLS)
@@ -645,14 +710,15 @@ def removal_cause(opps: pd.DataFrame, trades: pd.DataFrame, slack_s: float = 0.2
 # ---------------------------------------------------------------------------
 def simulate_fills(opps: pd.DataFrame, tl: BookTimeline, latencies_ms: Sequence[int] = LATENCIES_MS,
                    margin: float = 0.0, max_shares: float = MAX_SHARES, outcome_up: bool | None = None,
-                   markout_s: float = 10.0, fee_rate: float = FEE_RATE) -> pd.DataFrame:
+                   markout_s: float = 10.0, fee_rate: float = FEE_RATE, end_s: float | None = None) -> pd.DataFrame:
     """Pour chaque opportunité détectée à ``t_start`` et chaque latence ℓ : ordre au carnet vu à
     ``t_start + ℓ`` ; achat au meilleur ask du côté si ``p_side(t) − coût(ask) > margin`` (limite
     calculée à t), quantité ``min(taille au meilleur ask, max_shares)``.
 
     Colonnes : ``latency_ms``, ``filled``, ``fill_ask``, ``qty``, ``edge_fill`` (avantage attendu par
     part au prix payé), ``pnl`` (issue officielle ; NaN si inconnue), ``markout`` (valorisé au milieu du
-    côté ``markout_s`` après l'exécution) et les colonnes d'identification de l'opportunité.
+    côté ``markout_s`` après l'exécution ; à l'issue si cet instant dépasse la clôture ``end_s`` ou si le
+    carnet n'a plus de milieu) et les colonnes d'identification de l'opportunité.
     """
     rows = []
     if opps.empty:
@@ -678,15 +744,17 @@ def simulate_fills(opps: pd.DataFrame, tl: BookTimeline, latencies_ms: Sequence[
             win = np.full(t0.size, np.nan)
         else:
             win = np.where(sides == 1, float(outcome_up), 1.0 - float(outcome_up))
+        after = (tf + markout_s >= end_s) if end_s is not None else np.zeros(t0.size, bool)
+        mid_side = np.where(after | ~np.isfinite(mid_side), win, mid_side)
         pnl = np.where(filled, qty * (win - cost), 0.0)
         mk = np.where(filled, qty * (mid_side - cost), 0.0)
-        for i in range(t0.size):
-            rows.append((i, "up" if sides[i] == 1 else "down", t0[i], int(lat), bool(filled[i]),
-                         a[i] if filled[i] else math.nan, qty[i], edge[i] if filled[i] else math.nan,
-                         pnl[i] if outcome_up is not None else math.nan, mk[i],
-                         (win[i] - cost[i]) if filled[i] and outcome_up is not None else math.nan))
-    return pd.DataFrame(rows, columns=["opp_id", "side", "t_start", "latency_ms", "filled", "fill_ask", "qty",
-                                       "edge_fill", "pnl", "markout", "pnl_per_share"])
+        known = outcome_up is not None
+        rows.append(pd.DataFrame({
+            "opp_id": np.arange(t0.size), "side": np.where(sides == 1, "up", "down"), "t_start": t0,
+            "latency_ms": int(lat), "filled": filled, "fill_ask": np.where(filled, a, np.nan), "qty": qty,
+            "edge_fill": np.where(filled, edge, np.nan), "pnl": pnl if known else np.full(t0.size, np.nan),
+            "markout": mk, "pnl_per_share": np.where(filled & known, win - cost, np.nan)}))
+    return pd.concat(rows, ignore_index=True)
 
 
 def pnl_curve(fills: pd.DataFrame, value: str = "pnl", group: str = "market") -> pd.DataFrame:
@@ -713,8 +781,9 @@ def bootstrap_by_group(fills: pd.DataFrame, value: str = "pnl", group: str = "ma
     groups = np.array(sorted(fills[group].unique()))
     if groups.size == 0:
         return {"latencies": lats, "point": np.full(lats.size, np.nan), "reps": np.empty((0, lats.size))}
+    fills = fills[np.isfinite(fills[value].to_numpy(dtype="float64"))]
     gi = {g: i for i, g in enumerate(groups)}
-    li = {l: i for i, l in enumerate(lats)}
+    li = {lat: i for i, lat in enumerate(lats)}
     sums = np.zeros((groups.size, lats.size))
     cnts = np.zeros((groups.size, lats.size))
     gcol = fills[group].map(gi).to_numpy()
@@ -735,13 +804,33 @@ def bootstrap_by_group(fills: pd.DataFrame, value: str = "pnl", group: str = "ma
     return {"latencies": lats, "point": point, "reps": reps}
 
 
-def breakeven_latency(latencies: Sequence[float], values: Sequence[float]) -> float:
+def isotonic_decreasing(values: Sequence[float], weights: Sequence[float] | None = None) -> np.ndarray:
+    """Régression isotone **décroissante** (algorithme PAVA) : la suite non croissante la plus proche au sens
+    des moindres carrés pondérés. Sert à lisser une courbe de P&L selon la latence, qui ne peut que baisser
+    en espérance quand on arrive plus tard."""
+    y = np.asarray(values, dtype="float64")
+    w = np.ones_like(y) if weights is None else np.asarray(weights, dtype="float64")
+    blocks: list[list[float]] = []            # [moyenne, poids, longueur]
+    for yi, wi in zip(y, w):
+        blocks.append([yi, wi, 1])
+        while len(blocks) > 1 and blocks[-2][0] < blocks[-1][0]:
+            m2, w2, n2 = blocks.pop()
+            m1, w1, n1 = blocks.pop()
+            blocks.append([(m1 * w1 + m2 * w2) / (w1 + w2), w1 + w2, n1 + n2])
+    return np.concatenate([np.full(int(n), m) for m, _, n in blocks]) if blocks else y
+
+
+def breakeven_latency(latencies: Sequence[float], values: Sequence[float], monotone: bool = False) -> float:
     """Première latence où la courbe de P&L devient <= 0 (interpolation linéaire entre les points de la
-    grille). 0 si déjà <= 0 à la première latence ; ``inf`` si elle reste > 0."""
+    grille). 0 si déjà <= 0 à la première latence ; ``inf`` si elle reste > 0. ``monotone`` : la courbe
+    est d'abord rendue décroissante (:func:`isotonic_decreasing`), ce qui stabilise ℓ* quand le P&L oscille
+    autour de 0."""
     x = np.asarray(latencies, dtype="float64")
     y = np.asarray(values, dtype="float64")
     ok = np.isfinite(y)
     x, y = x[ok], y[ok]
+    if monotone and y.size:
+        y = isotonic_decreasing(y)
     if y.size == 0:
         return math.nan
     if y[0] <= 0:
@@ -750,6 +839,18 @@ def breakeven_latency(latencies: Sequence[float], values: Sequence[float]) -> fl
         if y[i] <= 0:
             return float(x[i - 1] + (x[i] - x[i - 1]) * y[i - 1] / (y[i - 1] - y[i]))
     return math.inf
+
+
+def last_significant_latency(latencies: Sequence[float], lower_bounds: Sequence[float]) -> float:
+    """Plus grande latence ℓ de la grille telle que la borne basse de l'IC reste > 0 pour **toutes** les
+    latences <= ℓ (gain démontré). NaN si ce n'est pas le cas dès la première."""
+    x = np.asarray(latencies, dtype="float64")
+    lo = np.asarray(lower_bounds, dtype="float64")
+    ok = np.nan_to_num(lo, nan=-np.inf) > 0
+    if not ok.size or not ok[0]:
+        return math.nan
+    stop = np.flatnonzero(~ok)
+    return float(x[stop[0] - 1]) if stop.size else float(x[-1])
 
 
 # ---------------------------------------------------------------------------
