@@ -1,0 +1,20 @@
+etape,secondes
+"1a. marchés BTC 5m/15m (cache), issue officielle, priceToBeat/finalPrice, σ TimesFM",0.91
+1b. Binance 1 s (cache pm_maker) et 1 m (cache),0.73
+1c. trades preneurs (cache wallets/trades),14.17
+2a. entrées de la formule (Binance 1 s) et σ,0.81
+"2b. alignement Binance / Chainlink (priceToBeat, finalPrice)",0.01
+"2c. choix de la demi-vie EWMA (1re moitié, log-loss)",0.15
+"2d. probabilités de la formule (3 σ bruts, σ × k, variante corrigée)",2.11
+2e. prix du marché à t et exécutions à t + δ (trades preneurs),2.5
+3a. calibration et scores par instant / phase / durée,15.2
+3b. empilement et information au-delà du marché,0.92
+3c. P&L preneur selon la latence δ,2.23
+3d. exemple chiffré à S−10 s,0.01
+"4a. marchés du collecteur (carnet reconstruit, issue)",67.39
+"4b. Binance 1 s (data-api, cache pm_formula) et bougies 1 m",13.52
+"4c. formule, carnet à t + δ, exécutions (10 et 100 parts)",3.14
+4d. scores formule contre milieu du carnet ; P&L par δ,0.07
+"4e. délai de réaction du carnet (trades agrégés Binance, ms)",46.54
+4f. retard bloc − appariement (data-api contre WebSocket),13.91
+total calcul,185.8

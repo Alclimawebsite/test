@@ -41,7 +41,7 @@ from tradebot import polymarket as pm  # noqa: E402
 from tradebot import polymarket_backtest as pb  # noqa: E402
 from tradebot import polymarket_formula_backtest as fb  # noqa: E402
 from tradebot.config import CACHE_DIR, REPORTS_DIR  # noqa: E402
-from tradebot.report import (BG, BLUE, GRID, ORANGE, TEXT, TEXT_2, _draw_header, _header,  # noqa: E402
+from tradebot.report import (BG, BLUE, ORANGE, TEXT, TEXT_2, _draw_header, _header,  # noqa: E402
                              _pyplot, _save, _style_axes, fmt_number, to_markdown)
 
 log = logging.getLogger("formula_backtest")
@@ -609,7 +609,7 @@ def load_live_markets(now: float) -> tuple[list, pd.DataFrame]:
         m = pbk.load_market(slug)
         y = m.resolved_up
         if y is None:
-            rows.append({**row, "statut": "issue inconnue (collecte interrompue)"})
+            rows.append({**row, "statut": "issue pas encore publiée"})
             continue
         first, last = m.coverage()
         row.update(y=float(y), premier_evt_rel_S=round(first - S, 1), dernier_evt_rel_E=round(last - E, 1),
@@ -784,12 +784,16 @@ def reaction(markets: list, series: dict, H: dict, sig_k: str, k_live: float, ca
             continue
         t_sig = S - 45
         sig = float(fb.bar_sigma_at(park, np.array([t_sig]))[0]) if sig_k == "park" else float(ev[t_sig - P.t0])
-        grid = np.arange((S - 45) * 1000, (E - 2) * 1000, 20, dtype="int64")
+        ts, mid = fb.mid_path(m)
+        ok_mid = np.flatnonzero(np.isfinite(mid))
+        if ok_mid.size == 0:
+            continue
+        g0 = max((S - 45) * 1000, int(ts[ok_mid[0]]) + 1000)       # pas d'événement avant le premier carnet
+        grid = np.arange(g0, (E - 2) * 1000, 20, dtype="int64")
+        if grid.size < 100:
+            continue
         pf = fb.formula_path_ms(P, grid, agg["T"].to_numpy(), agg["p"].to_numpy(), S, E, k_live * sig,
                                 lag_s=H["lag"], extra_sd=H["basis_sd"])
-        ts, mid = fb.mid_path(m)
-        if ts.size == 0:
-            continue
         mg = fb.step_values(ts, mid, grid)
         evs = fb.reaction_delays(grid, pf, mg, jump=0.05, window_ms=1000, quiet_ms=3000, horizon_ms=20_000)
         if evs.empty:
@@ -932,7 +936,6 @@ def fig_pnl_heat(H: dict, path: Path) -> str:
              f"≈ {f_(0.025 * cells['n'], 0)} attendues de chaque côté par hasard : aucun instant n'est rentable de façon fiable dès δ ≥ 2 s")
     sub = ("P&L par part (cents), formule corrigée, 2e moitié ; gras = IC 95 % qui exclut 0 (sans correction pour tests multiples) ; "
            "case vide = moins de 30 positions exécutées. Colonnes : δ (bloc − décision, s).")
-    plt = _pyplot()
     from matplotlib.colors import LinearSegmentedColormap
 
     fig, ax = _fig(9.0, 6.4, title, sub, left=0.2)
@@ -977,8 +980,9 @@ def fig_reaction(R: pd.DataFrame, path: Path) -> str:
     bins = np.arange(-1000, 3050, 50)
     ax.hist(np.clip(d, -1000, 3000), bins=bins, color=BLUE, edgecolor=BG, linewidth=0.5)
     ax.axvline(med, color=TEXT, lw=1.2)
-    ax.text(med + 30, ax.get_ylim()[1] * 0.95, f"médiane {n_(med)} ms", color=TEXT, fontsize=8.5, va="top")
+    ax.text(med - 30, ax.get_ylim()[1] * 0.97, f"médiane {n_(med)} ms", color=TEXT, fontsize=8.5, va="top", ha="right")
     ax.axvline(347, color=TEXT_2, lw=1.0, ls=(0, (3, 3)))
+    ax.text(377, ax.get_ylim()[1] * 0.97, "347 ms (OpenMarket)", color=TEXT_2, fontsize=8.5, va="top", ha="left")
     ax.set_xlabel("délai de réaction du carnet (ms ; > 3 000 regroupés à 3 000)", color=TEXT_2, fontsize=9)
     ax.set_ylabel("nombre de mouvements", color=TEXT_2, fontsize=9)
     _save(fig, path)
@@ -989,7 +993,7 @@ def fig_live_pnl(LP: pd.DataFrame, path: Path, n_mk: int) -> str:
     q = LP[LP["qte"] == 10]
     b = q[q["variante"] == "brute"].set_index("delta_s")
     c = q[q["variante"] == "corrigée"].set_index("delta_s")
-    title = (f"Sur le carnet réel, même sans latence, acheter quand la formule s'écarte de l'ask perd : "
+    title = (f"Sur le carnet réel, même sans latence, acheter quand la formule s'écarte de l'ask ne rapporte rien : "
              f"{c_(b.loc[0, 'pnl_par_part'])} par part (brute, IC {c_(b.loc[0, 'lo'])} ; {c_(b.loc[0, 'hi'])}), "
              f"{c_(c.loc[0, 'pnl_par_part'])} (corrigée) ; n petit, rien n'est démontré")
     sub = (f"P&L par part, 10 parts achetées au meilleur ask réel (carnet reconstruit à la ms) à t + δ, décision à t sur l'ask réel à t "
@@ -1001,11 +1005,11 @@ def fig_live_pnl(LP: pd.DataFrame, path: Path, n_mk: int) -> str:
     for d_, col, lab in ((c, BLUE, "formule corrigée"), (b, ORANGE, "formule brute")):
         xs = d_.index.to_numpy(dtype=float)
         ax.fill_between(xs, 100 * d_["lo"], 100 * d_["hi"], color=col, alpha=0.12, linewidth=0)
-        ax.plot(xs, 100 * d_["pnl_par_part"], color=col, lw=2.0, marker="o", ms=4)
-        ax.text(xs[-1] + 0.08, 100 * d_["pnl_par_part"].iloc[-1], lab, color=TEXT, fontsize=8.5, va="center")
+        ax.plot(xs, 100 * d_["pnl_par_part"], color=col, lw=2.0, marker="o", ms=4, label=lab)
+    ax.legend(loc="lower left", frameon=False, fontsize=9, labelcolor=TEXT)
     ax.set_xscale("symlog", linthresh=0.1)
     ax.set_xticks(list(fb.LIVE_DELAYS))
-    ax.set_xticklabels([fmt_number(x, 1 if x < 1 else 0) for x in fb.LIVE_DELAYS])
+    ax.set_xticklabels([fmt_number(x, 0 if x in (0, 1, 2, 5) else 1) for x in fb.LIVE_DELAYS])
     ax.set_xlim(-0.01, 7.5)
     ax.set_xlabel("δ : latence entre la décision et l'exécution au meilleur ask (s)", color=TEXT_2, fontsize=9)
     ax.set_ylabel("P&L par part (cents)", color=TEXT_2, fontsize=9)
@@ -1035,19 +1039,581 @@ def fig_vr(H: dict, path: Path) -> str:
     return title
 
 
+def _pick(df: pd.DataFrame, **kw) -> pd.Series:
+    m = np.ones(len(df), bool)
+    for k, v in kw.items():
+        m &= (df[k] == v).to_numpy()
+    return df[m].iloc[0]
+
+
+def write_csvs(H: dict, Lv: dict, rt: Runtime) -> list[tuple[str, str]]:
+    files = []
+
+    def w(df: pd.DataFrame, name: str, desc: str) -> None:
+        if df is None or len(df) == 0:
+            return
+        df.to_csv(OUT / name, index=False, float_format="%.6g")
+        files.append((name, desc))
+
+    w(H["scores"], "scores_par_instant.csv", "formule (brute, corrigée) contre marché par durée × instant, 2e moitié : Brier, log-loss, AUC, écarts et IC, pentes de calibration")
+    w(H["scores_sigma"], "scores_par_sigma.csv", "formule selon l'estimateur de σ (bruts, × k, corrigée) par durée × instant, 2e moitié")
+    w(H["scores_phase"], "scores_par_phase.csv", "formule par durée × phase, 2e moitié et période entière")
+    w(H["calibration"], "calibration.csv", "courbes de fiabilité par déciles (durée × phase × variante), 2e moitié")
+    w(H["tails"], "queues.csv", "queues : quand la formule annonce < 2 % ou > 98 %, fréquence réelle de l'improbable")
+    w(H["gap_dist"], "ecart_formule_marche.csv", "distribution de l'écart P_formule − p_marché par instant, 2e moitié")
+    w(H["stack"], "empilement.csv", "empilement formule + marché (2e moitié) et pente de l'écart sur l'issue")
+    w(H["stack_coefs"], "empilement_coefficients.csv", "coefficients de l'empilement appris sur la 1re moitié")
+    w(H["pnl"], "pnl_latence.csv", "P&L preneur par variante × groupe d'instants × δ (δ = −1 : ask estimé à t), 2e moitié")
+    w(H["margin_tab"], "marge_par_moitie.csv", "P&L par marge × moitié × δ (choix de la marge sur la 1re moitié)")
+    w(H["sig_sel"], "choix_sigma.csv", "log-loss 1re moitié de chaque σ, brut et × k")
+    w(H["hl_tab"], "choix_demi_vie_ewma.csv", "log-loss 1re moitié selon la demi-vie EWMA")
+    w(H["k_tab"], "choix_facteur_sigma.csv", "log-loss 1re moitié selon le facteur k appliqué à σ")
+    w(H["align"], "alignement_chainlink.csv", "Binance contre priceToBeat / finalPrice selon le décalage (écart de niveau, erreur sur F − K, accord d'issue)")
+    w(pd.concat([H["vr"], H["ac"]], ignore_index=True), "ratio_variance.csv", "ratio de variance et autocorrélations des rendements Binance 1 s (1re moitié)")
+    if Lv:
+        w(Lv.get("mtab"), "carnet_marches.csv", "marchés du collecteur : statut, issue, couverture")
+        w(Lv.get("PX"), "carnet_prix.csv", "carnet réel : formule, milieu, écart, tailles au meilleur niveau par marché × instant")
+        w(Lv.get("EX"), "carnet_executions.csv", "carnet réel : décisions et exécutions à t + δ (10 et 100 parts)")
+        w(Lv.get("live_scores"), "carnet_scores.csv", "carnet réel : Brier / log-loss formule contre milieu du carnet")
+        w(Lv.get("live_pnl"), "carnet_pnl.csv", "carnet réel : P&L par variante × δ × quantité, IC")
+        w(Lv.get("live_book"), "carnet_profondeur.csv", "carnet réel : écart et tailles médianes au meilleur ask par instant")
+        w(Lv.get("reaction"), "carnet_reaction.csv", "mouvements de la formule > 5 points et délai de réaction du carnet (ms)")
+        bl = Lv.get("block_lag")
+        if bl is not None and len(bl):
+            q = bl["retard_s"].quantile([0.05, 0.25, 0.5, 0.75, 0.95])
+            w(pd.DataFrame([{"n": len(bl), "marches": bl["slug"].nunique(), "moyenne_s": bl["retard_s"].mean(),
+                             **{f"q{int(100 * k)}_s": v for k, v in q.items()}}]),
+              "retard_blocs.csv", "retard horodatage de bloc (data-api) − appariement (WebSocket), par trade apparié")
+    w(pd.DataFrame(rt.rows), "runtime.csv", "temps de calcul par étape (s)")
+    return files
+
+
 def write_report(H: dict, Lv: dict, rt: Runtime, args) -> None:
-    pn = H["pnl"]
-    print(H["margins"])
-    print(pn[pn["groupe"] == "tous les instants"].to_string())
-    for k in ("mtab", "live_scores", "live_pnl", "live_book"):
-        if k in Lv:
-            print(Lv[k].to_string())
-    if "reaction" in Lv and len(Lv["reaction"]):
-        r = Lv["reaction"]
-        print(len(r), r["censored"].mean(), r["delay_ms"].describe())
-    if "block_lag" in Lv and len(Lv["block_lag"]):
-        print(Lv["block_lag"]["retard_s"].describe())
-    print(pd.DataFrame(rt.rows).to_string())
+    files = write_csvs(H, Lv, rt)
+    figs = {}
+    lag_block = float(Lv["block_lag"]["retard_s"].median()) if Lv and len(Lv.get("block_lag", [])) else 2.0
+    figs["calibration"] = fig_calibration(H, OUT / "calibration.png")
+    figs["brier"] = fig_brier(H, OUT / "brier_vs_marche.png")
+    figs["pnl"] = fig_pnl_latency(H, lag_block, OUT / "pnl_latence.png")
+    figs["heat"] = fig_pnl_heat(H, OUT / "pnl_par_instant.png")
+    figs["vr"] = fig_vr(H, OUT / "ratio_variance.png")
+    has_live = bool(Lv) and len(Lv.get("live_pnl", [])) > 0
+    if has_live:
+        n_mk = int((Lv["mtab"]["statut"] == "exploitable").sum())
+        figs["live"] = fig_live_pnl(Lv["live_pnl"], OUT / "pnl_carnet_reel.png", n_mk)
+        if len(Lv.get("reaction", [])):
+            figs["reaction"] = fig_reaction(Lv["reaction"], OUT / "reaction_carnet.png")
+    text = readme(H, Lv, rt, figs, files, lag_block)
+    (OUT / "README.md").write_text(text, encoding="utf-8")
+
+
+def readme(H: dict, Lv: dict, rt: Runtime, figs: dict, files: list, lag_block: float) -> str:
+    L_: list[str] = []
+    w = L_.append
+    sc, sp, st, pn = H["scores"], H["scores_phase"], H["stack"], H["pnl"]
+    scT = sc[sc["duree"] == "tous"].set_index(["variante", "instant"])
+    spT = sp[(sp["duree"] == "tous") & (sp["periode"] == "2e moitié")].set_index(["variante", "phase"])
+    stC = st[st["variante"] == "corrigée"].set_index("instant")
+    tails = H["tails"]
+    tb = tails[(tails["duree"] == "tous") & (tails["phase"] == 3) & (tails["variante"] == "brute") & (tails["zone"].str.startswith("P <"))].iloc[0]
+    tc = tails[(tails["duree"] == "tous") & (tails["phase"] == 3) & (tails["variante"] == "corrigée") & (tails["zone"].str.startswith("P <"))].iloc[0]
+    sl_b = [spT.loc[("brute", p), "pente_calibration"] for p in (2, 3, 4)]
+    sl_c = [spT.loc[("corrigée", p), "pente_calibration"] for p in (2, 3, 4)]
+    v60 = float(H["vr"].set_index("horizon_s").loc[60, "ratio_variance"])
+    ac1 = float(H["ac"].set_index("retard_s").loc[1, "autocorrelation"])
+    dB = scT.xs("corrigée")["d_brier"]
+    worse = [l_ for l_ in LABELS if scT.loc[("corrigée", l_), "d_brier_lo"] > 0]
+    better = [l_ for l_ in LABELS if scT.loc[("corrigée", l_), "d_brier_hi"] < 0]
+    pnlC = pn[(pn["variante"] == "corrigée") & (pn["groupe"] == "tous les instants")].set_index("delta_s")
+    pnlB = pn[(pn["variante"] == "brute") & (pn["groupe"] == "tous les instants")].set_index("delta_s")
+    ex = H["example"]
+    now = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
+    tot = rt.rows[-1]["secondes"] if rt.rows else math.nan
+    n_live = int((Lv["mtab"]["statut"] == "exploitable").sum()) if Lv and "mtab" in Lv else 0
+    near_open = ["S-10", "S-5", "S-2", "S", "S+2"]
+    slopes_open = [stC.loc[l_, "pente_ecart"] for l_ in near_open]
+    sig_open = sum(stC.loc[l_, "pente_lo"] > 0 for l_ in near_open)
+    stack_sig = [l_ for l_ in LABELS if stC.loc[l_, "hi"] < 0]
+    stack_bad = [l_ for l_ in LABELS if stC.loc[l_, "lo"] > 0]
+    mt = H["margin_tab"]
+    tr2 = mt[(mt["moitie"] == "1re moitié") & (mt["delta_s"] == 2)]
+    all_neg2 = bool((tr2["pnl_par_part"] < 0).all())
+
+    w("# La formule exacte P(Up) contre le marché — Polymarket « Up or Down » BTC 5m / 15m")
+    w("")
+    w(f"*Généré le {now} par `scripts/polymarket_formula_backtest.py` (temps de calcul : {fmt_number(tot, 0)} s, détail § 8). "
+      f"Historique : {n_(H['n_markets'])} marchés BTC 5m et 15m du 04/09 au 24/09/2026 (tous). "
+      f"Carnet réel : {n_live} marchés BTC 5m, BTC 15m et ETH 5m enregistrés à la milliseconde le 26/09/2026.*")
+    w("")
+    w("> Simulation papier sur données publiques : aucun ordre, aucune clé. La formule est celle de "
+      "`src/tradebot/polymarket_formula.py` (vérifiée par Monte-Carlo dans `tests/test_polymarket_formula.py`).")
+    w("")
+    w("## 0. Réponse courte")
+    w("")
+    w(f"* **La formule est juste, à condition de mesurer σ à la bonne échelle.** Telle quelle (σ = EWMA des rendements Binance 1 s, "
+      f"demi-vie {H['hl']} s, le meilleur des trois σ sur la 1re moitié), elle classe bien mais elle est **trop sûre d'elle** : pente de "
+      f"calibration {f_(min(sl_b), 2)} à {f_(max(sl_b), 2)} selon la phase (1 = parfait). Quand elle annonce moins de 2 % (K connu), "
+      f"l'improbable arrive {fmt_number(tb['observe'], 1, pct=True)} du temps au lieu de {fmt_number(tb['attendu'], 1, pct=True)}. "
+      f"La cause est mesurée : les rendements Binance 1 s sont autocorrélés (+{f_(ac1, 2)} d'une seconde à l'autre) et la variance sur "
+      f"une minute vaut {f_(v60, 2)} × la somme des variances 1 s. Avec σ × {f_(H['k_val'], 2)}, Binance décalé de {H['lag']} s "
+      f"(Chainlink est en retard) et un bruit de source de {f_(H['basis_sd'] * 1e4, 2)} pb, tous trois fixés sur la 1re moitié, la pente "
+      f"passe à {f_(min(sl_c), 2)}–{f_(max(sl_c), 2)} sur la 2e moitié : la formule « corrigée » est calibrée, à ± 0,2 près.")
+    w(f"* **Elle ne bat pas le marché.** Au même instant, le prix du dernier trade preneur prévoit aussi bien ou mieux. L'écart de Brier "
+      f"(formule corrigée − marché) va de {f_(1e3 * dB.min(), 2, True)} à {f_(1e3 * dB.max(), 2, True)} × 10⁻³. L'IC est en faveur du "
+      f"marché à {', '.join(PRETTY[l_] for l_ in worse) if worse else 'aucun instant'} ({len(worse)} instants sur 17), et "
+      + (f"en faveur de la formule à {', '.join(PRETTY[l_] for l_ in better)}." if better else "jamais en faveur de la formule.")
+      + f" Les AUC sont identiques (à S : formule {f_(scT.loc[('corrigée', 'S'), 'auc_formule'], 3)}, marché "
+      f"{f_(scT.loc[('corrigée', 'S'), 'auc_marche'], 3)}).")
+    w(f"* **Son désaccord avec le marché contient un peu d'information, autour de l'ouverture seulement.** La pente de l'issue sur l'écart "
+      f"formule − marché vaut {f_(min(slopes_open), 2)} à {f_(max(slopes_open), 2)} de S−10 à S+2 (IC qui exclut 0 à {sig_open} de ces "
+      f"5 instants ; 1 voudrait dire « la formule a raison, le marché tort »). Mais l'empilement formule + marché appris sur la 1re moitié "
+      f"n'améliore le Brier du marché de façon significative qu'à {', '.join(PRETTY[l_] for l_ in stack_sig) if stack_sig else 'aucun instant'}"
+      + (f" ({f_(1e3 * stC.loc[stack_sig[0], 'd_brier_emp_marche'], 2, True)} × 10⁻³, sur un Brier de {f_(stC.loc[stack_sig[0], 'brier_marche'], 3)})" if stack_sig else "")
+      + f", et le dégrade à {', '.join(PRETTY[l_] for l_ in stack_bad) if stack_bad else 'aucun instant'} : l'information en plus est minuscule.")
+    w(f"* **Pour gagner, il faut acheter au prix d'avant la décision.** Règle : acheter si P − coût(ask estimé) > marge (marge fixée sur "
+      f"la 1re moitié : {c_(H['margins']['corrigée'], 0)} pour la formule corrigée). P&L par part, frais inclus, 2e moitié : "
+      f"{ci_c(pnlC.loc[0, 'pnl_par_part'], pnlC.loc[0, 'lo'], pnlC.loc[0, 'hi'])} au prix du premier trade dont le bloc est ≥ t, "
+      f"{ci_c(pnlC.loc[1, 'pnl_par_part'], pnlC.loc[1, 'lo'], pnlC.loc[1, 'hi'])} à δ = 1 s, "
+      f"{ci_c(pnlC.loc[2, 'pnl_par_part'], pnlC.loc[2, 'lo'], pnlC.loc[2, 'hi'])} à δ = 2 s, puis négatif "
+      f"({c_(pnlC.loc[10, 'pnl_par_part'])} à 10 s). La formule brute fait {c_(pnlB.loc[0, 'pnl_par_part'])} à δ = 0 et "
+      f"{c_(pnlB.loc[2, 'pnl_par_part'])} à δ = 2 s.")
+    if Lv and len(Lv.get("block_lag", [])):
+        bl = Lv["block_lag"]["retard_s"]
+        w(f"* **Or un bloc arrive {f_(bl.median(), 1)} s après l'appariement** (médiane mesurée sur {n_(len(bl))} trades vus à la fois "
+          f"dans le WebSocket et dans data-api ; quartiles {f_(bl.quantile(0.25), 1)}–{f_(bl.quantile(0.75), 1)} s). « δ = 0 » est donc un "
+          f"prix apparié ≈ {f_(bl.median(), 1)} s **avant** la décision, inaccessible ; δ = 2 s correspond à une exécution à t. "
+          "À latence réelle nulle, il ne reste rien de significatif.")
+    if Lv and len(Lv.get("reaction", [])):
+        R = Lv["reaction"]
+        ok = R[~R["censored"]]["delay_ms"]
+        w(f"* **Le carnet réel suit Binance en ≈ {n_(ok.median())} ms** (médiane ; quartiles {n_(ok.quantile(0.25))}–"
+          f"{n_(ok.quantile(0.75))} ms ; {n_(len(R))} mouvements de la formule de plus de 5 points en 1 s). "
+          f"{fmt_number(R['censored'].mean(), 0, pct=True)} des mouvements ne sont jamais suivis : le marché n'y croit pas.")
+    if Lv and len(Lv.get("live_pnl", [])):
+        LP = Lv["live_pnl"]
+        b0 = _pick(LP, variante="brute", delta_s=0.0, qte=10)
+        c0 = _pick(LP, variante="corrigée", delta_s=0.0, qte=10)
+        b100 = _pick(LP, variante="brute", delta_s=0.0, qte=100)
+        w(f"* **Sur le carnet réel, même sans latence, rien n'est gagné** (n petit : {n_live} marchés, {int(b0['creneaux'])} créneaux de "
+          f"15 min ; les IC contiennent 0). En achetant au meilleur ask affiché à t : formule brute {ci_c(b0['pnl_par_part'], b0['lo'], b0['hi'])} "
+          f"par part ({int(b0['decisions'])} décisions), corrigée {ci_c(c0['pnl_par_part'], c0['lo'], c0['hi'])} "
+          f"({int(c0['decisions'])} décisions) ; aucune latence de 0 à 5 s ne donne un P&L positif. La profondeur n'est pas la contrainte : "
+          f"{n_(b0['taille_meilleur_ask_mediane'])} parts au meilleur ask (médiane), et 100 parts coûtent "
+          f"{f_(100 * (b100['prix_moyen'] - b0['prix_moyen']), 1)} c de plus que 10.")
+    w(f"* **Verdict : la formule est exacte, mais le marché la connaît et l'applique en un quart de seconde.** Le gain historique "
+      f"({c_(pnlC.loc[1, 'pnl_par_part'], 0)} à {c_(pnlC.loc[0, 'pnl_par_part'], 0)} par part, sur {n_(pnlC.loc[0, 'executees'])} achats "
+      "en 11 jours) n'existe que contre des prix vieux d'une à deux secondes ; or le carnet se remet à jour ≈ 250 ms après Binance, et ces "
+      "prix ont disparu quand un preneur arrive. Pour gagner, il faudrait voir Binance et frapper le carnet en moins de ≈ 250 ms (vitesse "
+      "d'un teneur de marché), et l'avantage serait alors inférieur à cette borne de quelques cents. Avec une latence d'une seconde ou plus "
+      f"(un robot qui lit Binance à la seconde), il ne reste rien après frais : {ci_c(pnlC.loc[2, 'pnl_par_part'], pnlC.loc[2, 'lo'], pnlC.loc[2, 'hi'])} "
+      "par part à exécution immédiate, négatif ensuite.")
+    w("")
+
+    # 1. la formule en clair
+    w("## 1. La formule en clair")
+    w("")
+    w("Règle officielle (TWAP-60, vérifiée sur 8 063 marchés) : on note p le log-prix Chainlink publié chaque seconde, S l'ouverture, "
+      "E la clôture, D = E − S (300 s ou 900 s).")
+    w("")
+    w("```text")
+    w("K = moyenne de p sur (S − 60, S]      (le « prix à battre », 60 points)")
+    w("F = moyenne de p sur (E − 60, E]      (le prix final)")
+    w("« Up »  si et seulement si  F ≥ K")
+    w("")
+    w("Si p suit une marche aléatoire de volatilité σ (par √seconde) :")
+    w("")
+    w("    P(Up | ce qu'on sait à t) = Φ( m(t) / s(t) )        Φ = loi normale")
+    w("")
+    w("Phase 1   t ≤ S − 60        m = 0                                   → P = 0,5")
+    w("Phase 2   S − 60 < t ≤ S    m = (a / 60) · (p_t − Ā)                a = t − (S − 60), Ā = moyenne réalisée sur (S − 60, t]")
+    w("                            s² = σ² · (D − 40 + r − r²/60 + r³/10 800),   r = S − t")
+    w("Phase 3   S < t ≤ E − 60    m = p_t − K                             s² = σ² · (E − t − 40)")
+    w("Phase 4   E − 60 < t ≤ E    m = B + (τ / 60) · p_t − K              B = (somme réalisée sur (E − 60, t]) / 60, τ = E − t")
+    w("                            s² = σ² · τ³ / 10 800")
+    w("```")
+    w("")
+    w("Intuition : avant S, le prix à battre n'est pas encore fixé ; si le prix actuel est au-dessus de la moyenne en cours, K finira sous "
+      "le prix actuel, d'où un avantage à « Up » (le « TWAP partiel »). Après S, c'est l'écart au prix à battre, rapporté à la volatilité "
+      "qui reste. Le code utilise la version exacte à la seconde (sommes discrètes), qui coïncide avec ces formules à < 1 % près. "
+      "Décision preneur : acheter « Up » à l'ask a coûte a + 0,07 · a · (1 − a) ; l'espérance par part est P − a − 0,07 · a · (1 − a) "
+      "(symétrique pour « Down »).")
+    w("")
+    diff = ex["diff_bp"]
+    w(f"**Exemple chiffré à S−10 s** (`{ex['slug']}`, ouverture {pd.Timestamp(ex['S'], unit='s', tz='UTC'):%d/%m/%Y %H:%M} UTC, 2e moitié) :")
+    w("")
+    w(f"* Binance à t = S−10 s : {fmt_number(ex['price'], 2)} $ ; moyenne des 50 closes 1 s de (S−60, S−10] : "
+      f"{fmt_number(ex['avg_price'], 2)} $ ; p_t − Ā = {f_(diff, 2, True)} pb ; a = 50 s ⇒ m = 50/60 × ({f_(diff, 2, True)}) = "
+      f"{f_(ex['m'] * 1e4, 2, True)} pb.")
+    w(f"* σ ({SIG_NAMES[ex['sigma_name']]}) = {f_(ex['sigma'] * 1e4, 3)} pb/√s ; facteur de variance exact (r = 10 s, D = 300 s) = "
+      f"{f_(ex['vf'], 1)} (formule continue : 300 − 40 + 10 − 100/60 + 1 000/10 800 = {f_(300 - 40 + 10 - 100 / 60 + 1000 / 10800, 1)}) ; "
+      f"s = {f_(ex['sigma'] * 1e4, 3)} × √{f_(ex['vf'], 1)} = {f_(ex['sd'] * 1e4, 2)} pb.")
+    w(f"* m / s = {f_(ex['m'] / ex['sd'], 3, True)} ⇒ **P(Up) = Φ({f_(ex['m'] / ex['sd'], 3, True)}) = {f_(ex['p'], 3)}** "
+      f"(formule brute). Corrigée (σ × {f_(H['k_val'], 2)} = {f_(ex['sigma_c'] * 1e4, 3)} pb/√s, Binance décalé de {H['lag']} s, "
+      f"bruit de source) : m = {f_(ex['m_c'] * 1e4, 2, True)} pb, s = {f_(ex['sd_c'] * 1e4, 2)} pb, P(Up) = {f_(ex['p_c'], 3)}.")
+    au, ad = fb.estimated_asks(np.array([ex["p_mkt"]]))
+    cost_dn = float(ad[0] + fb.taker_fee(ad[0]))
+    w(f"* Marché au même instant : dernier trade = {f_(ex['p_mkt'], 3)} (pour Up). Acheter « Down » coûterait ≈ {f_(ad[0], 3)} + frais "
+      f"{f_(float(fb.taker_fee(ad[0])), 4)} = {f_(cost_dn, 3)} ; espérance selon la formule corrigée : {f_(1 - ex['p_c'], 3)} − "
+      f"{f_(cost_dn, 3)} = {c_(1 - ex['p_c'] - cost_dn)} par part, sous la marge de {c_(H['margins']['corrigée'], 0)} : pas d'achat. "
+      f"Issue officielle : **{'Up' if ex['y'] > 0.5 else 'Down'}**.")
+    w("")
+
+    # 2. données
+    w("## 2. Données")
+    w("")
+    bc = H["by_cell"].set_index("duration")
+    ts_ = H["trade_sources"]
+    w(f"* **Marchés** : {n_(H['n_markets'])} marchés BTC du 04/09 au 24/09/2026 ({n_(bc.loc['5m', 'n'])} en 5m, taux de Up "
+      f"{fmt_number(bc.loc['5m', 'up'], 1, pct=True)} ; {n_(bc.loc['15m', 'n'])} en 15m, {fmt_number(bc.loc['15m', 'up'], 1, pct=True)}), "
+      "issue officielle (`PolymarketClient`, cache), `priceToBeat`/`finalPrice` (caches `event_meta` et `markets.csv`). Choix des "
+      "paramètres : 04/09–13/09 (1re moitié) ; évaluation : 14/09–24/09 (2e moitié).")
+    w("* **Binance** : closes 1 s BTCUSDT (cache `pm_maker/binance_1s`, 03/09–24/09) ; bougies 1 m (cache `BTCUSDT_1m`) pour Parkinson ; "
+      "σ TimesFM par marché (`reports/timesfm_amplitude/sigma_par_marche.csv`, prévu à S−120 s donc connu à tous les instants).")
+    w(f"* **Trades preneurs** : {n_(H['n_trades'])} trades de {n_(H['n_with_trades'])} marchés, horodatés au bloc Polygon (data-api, "
+      f"cache `wallets/trades`) : {n_(ts_['taker'])} marchés depuis les fichiers `*_taker`, {n_(ts_['all'])} (une partie du 23/09 et le "
+      "24/09, absents de ces fichiers) depuis les jambes `role = taker` des fichiers `*_all`.")
+    if Lv and "mtab" in Lv:
+        mtab = Lv["mtab"]
+        stc = mtab["statut"].value_counts()
+        w(f"* **Carnet réel** : fichiers du collecteur (`data/cache/polymarket/live/`, carnet reconstruit par `tradebot.polymarket_book`) : "
+          f"{len(mtab)} marchés enregistrés, **{n_live} exploitables** ; écartés : "
+          + ", ".join(f"{k} ({v})" for k, v in stc.items() if k != "exploitable")
+          + ". Binance 1 s (BTC, ETH) et trades agrégés (ms) via `data-api.binance.vision`, cache `data/cache/pm_formula/`.")
+    w("")
+
+    # 3. méthode
+    al = H["align"]
+    a1 = al[al["moitie"] == "1re moitié"].set_index("decalage_s")
+    a2 = al[al["moitie"] == "2e moitié"].set_index("decalage_s")
+    w("## 3. Méthode")
+    w("")
+    w("**Alignement (aucune donnée après t).** La bougie Binance 1 s ouverte à u − 1 clôt à u : son close est « le prix à u », "
+      "connu à u. À l'instant t, la formule n'utilise que les prix aux instants ≤ t : p_t = close de la bougie ouverte à t − 1 ; "
+      "Ā = moyenne sur (S − 60, t] ; K = moyenne sur (S − 60, S] ; B = somme sur (E − 60, t] / 60. Les σ sont calculés avant t : "
+      "Parkinson sur les 60 dernières bougies 1 m **closes** à t ; EWMA des rendements 1 s jusqu'à t ; TimesFM prévu à S − 120 s. "
+      "Des tests unitaires modifient toutes les données postérieures à t et vérifient que rien ne change "
+      "(`tests/test_polymarket_formula_backtest.py`).")
+    w("")
+    w(f"**K vient de Binance, pas du `priceToBeat`.** Vérification sur les {n_(H['n_markets'])} marchés : la moyenne Binance sur "
+      f"(S − 60, S] dépasse le `priceToBeat` Chainlink de {f_(a1.loc[0, 'ecart_niveau_moyen_pb'], 1)} pb en moyenne sur la 1re moitié "
+      f"et de {f_(a2.loc[0, 'ecart_niveau_moyen_pb'], 1)} pb sur la 2e (écart-type {f_(a1.loc[0, 'ecart_niveau_sd_pb'], 1)} à "
+      f"{f_(a2.loc[0, 'ecart_niveau_sd_pb'], 1)} pb) : l'écart de niveau n'est pas constant d'un jour à l'autre. En revanche il "
+      f"s'annule dans F − K : l'erreur quadratique sur F − K n'est que de {f_(a1.loc[0, 'rmse_F_moins_K_pb'], 2)} pb. Comparer le spot "
+      f"Binance au `priceToBeat` introduirait un biais de 2 à 4 pb, énorme en fin de fenêtre (s ≈ 1 pb à E−10 s). Décaler Binance de "
+      f"{H['lag']} s vers le passé réduit cette erreur à {f_(a1.loc[H['lag'], 'rmse_F_moins_K_pb'], 2)} pb (1re moitié ; "
+      f"{f_(a2.loc[H['lag'], 'rmse_F_moins_K_pb'], 2)} pb sur la 2e) : Chainlink est en retard d'environ {H['lag']} s sur Binance. "
+      f"Même avec le bon K, l'issue calculée sur Binance ne coïncide avec l'issue officielle que dans "
+      f"{fmt_number(a2.loc[H['lag'], 'accord_issue'], 1, pct=True)} des cas (2e moitié) : c'est un plancher d'erreur en fin de fenêtre.")
+    w("")
+    w("**Trois σ, tous connus avant t** : (i) Parkinson « hauts/bas » sur les bougies 1 m des 60 dernières minutes ; (ii) EWMA des carrés "
+      f"des rendements 1 s, demi-vie choisie sur la 1re moitié parmi {', '.join(str(h) for h in HL_GRID)} s (log-loss) : **{H['hl']} s** ; "
+      "(iii) TimesFM : σ prévu à l'horizon de h = D/60 + 1 bougies 1 m, divisé par √(60 h) pour l'avoir par √s. L'estimateur principal est choisi sur la 1re moitié par "
+      f"log-loss : **{SIG_NAMES[H['sig_best']]}**.")
+    w("")
+    ss = H["sig_sel"].copy()
+    ss["sigma"] = ss["sigma"].map(SIG_NAMES)
+    w(to_markdown(ss.rename(columns={"sigma": "σ", "logloss_1re_moitie": "log-loss brut", "brier_1re_moitie": "Brier brut",
+                                     "k": "facteur k choisi", "logloss_1re_moitie_k": "log-loss avec σ × k", "n": "n (marché × instant)"}),
+                  {"log-loss brut": 4, "Brier brut": 4, "facteur k choisi": 2, "log-loss avec σ × k": 4}))
+    w("")
+    w(f"**Deux variantes.** *Brute* : la formule telle quelle avec {SIG_NAMES[H['sig_best']]} (ce que demande l'énoncé). *Corrigée* : "
+      f"σ × k (k choisi sur la 1re moitié par log-loss, grille 0,80–2,20 ; retenu : {SIG_NAMES[H['sig_best_k']]} × {f_(H['k_val'], 2)}), "
+      f"Binance décalé de {H['lag']} s (décalage qui minimise l'erreur sur F − K contre `priceToBeat`/`finalPrice` sur la 1re moitié ; "
+      f"la formule est alors évaluée à τ = t + {H['lag']} s avec les données Binance ≤ t) et un bruit de source de "
+      f"{f_(H['basis_sd'] * 1e4, 2)} pb ajouté à s (l'erreur résiduelle sur F − K, 1re moitié). Aucun de ces trois paramètres n'utilise "
+      "les issues de la 2e moitié.")
+    w("")
+    w("**Prix du marché au même instant** : dernier trade preneur de bloc ≤ t, ramené au jeton Up (un trade sur Down au prix p compte "
+      f"1 − p), ignoré s'il a plus de {MAX_AGE_S} s ; variante : VWAP des trades de bloc dans [t − 3 s, t] (dans `scores_par_instant.csv`).")
+    w("")
+    w(f"**P&L preneur** : à t, ask estimé = prix de référence (VWAP 3 s, sinon dernier trade) + 0,005 pour Up et 1 − référence + 0,005 "
+      f"pour Down ; on achète le côté dont l'espérance P − (ask + 0,07·ask·(1 − ask)) dépasse la marge. Prix payé : **premier achat preneur "
+      f"du même jeton dont le bloc est dans [t + δ, t + δ + 2 s]**, δ ∈ {{{', '.join(str(int(d)) for d in fb.HIST_DELAYS)}}} s ; sans "
+      "trade dans la fenêtre, pas d'exécution (comptée à part). Frais 0,07·p·(1 − p), gain 1 si le côté acheté gagne (issue officielle). "
+      f"Marge choisie sur la 1re moitié dans {{{', '.join(fmt_number(100 * m, 1) for m in MARGIN_GRID)}}} c : P&L total maximal à δ = 0 s "
+      f"(cas le plus favorable), au moins 200 achats exécutés ⇒ **{c_(H['margins']['corrigée'], 0)}** (corrigée), "
+      f"**{c_(H['margins']['brute'], 0)}** (brute). "
+      + ("À δ = 2 s, **aucune** marge de la grille n'est rentable sur la 1re moitié (voir `marge_par_moitie.csv`) : la règle stricte "
+         "serait de ne jamais acheter." if all_neg2 else ""))
+    w("")
+    w("**Biais des horodatages de bloc** : un trade est horodaté au bloc Polygon qui l'inclut, "
+      + (f"en moyenne {f_(Lv['block_lag']['retard_s'].mean(), 2)} s (médiane {f_(lag_block, 2)} s) " if Lv and len(Lv.get('block_lag', [])) else "≈ 2 s ")
+      + "après l'appariement dans le carnet (mesuré ici en appariant par hash de transaction les trades du WebSocket, à la ms, et ceux de "
+      "data-api). Le « premier trade de bloc ≥ t + δ » a donc été apparié vers t + δ − 2,2 s : **le P&L historique à un δ donné est "
+      "optimiste** (le prix reflète un état du carnet plus ancien, d'avant que le marché intègre le mouvement de Binance). Lire δ − 2,2 s "
+      "comme la latence réelle. Le même retard vieillit le prix du marché « à t » (il a ≈ 2 s de plus que son horodatage) : la comparaison "
+      "du § 4b est donc biaisée **en faveur de la formule**, qui ne bat pourtant pas le marché.")
+    w("")
+    w("**Incertitude** : IC à 95 % par bootstrap groupé par créneau de 15 min (les 5m et 15m d'un même créneau sont tirés ensemble ; "
+      f"{args_boot(rt)} tirages). **Tests multiples** : 17 instants × 2 durées × 2 variantes pour les scores, 17 instants × 6 δ pour le "
+      "P&L ; aucun IC n'est corrigé : à 95 %, environ 1 case sur 40 sort « significative » de chaque côté par hasard. Les conclusions "
+      "reposent sur les agrégats et les motifs réguliers, pas sur une case isolée.")
+    w("")
+
+    # 4a calibration
+    w("## 4. Historique (BTC 5m + 15m, 2e moitié : 14/09–24/09/2026)")
+    w("")
+    w("### 4a. La formule est-elle juste ? (calibration contre l'issue officielle)")
+    w("")
+    w(f"![{figs['calibration']}](calibration.png)")
+    w("")
+    w(f"![{figs['vr']}](ratio_variance.png)")
+    w("")
+    ph = sp[(sp["periode"] == "2e moitié")].copy()
+    ph["phase"] = ph["phase"].map({2: "2 (S−45…S)", 3: "3 (S+2…E−60)", 4: "4 (E−30, E−10)"})
+    w("Par phase et par durée (2e moitié ; pente de calibration : logistique de l'issue sur logit(P), 1 = parfaitement calibrée, "
+      "< 1 = trop sûre d'elle) :")
+    w("")
+    w(to_markdown(ph[["duree", "phase", "variante", "n", "brier", "logloss", "auc", "accuracy", "pente_calibration"]].rename(
+        columns={"duree": "durée", "accuracy": "justesse", "pente_calibration": "pente de calibration", "logloss": "log-loss"}),
+        {"brier": 4, "log-loss": 4, "auc": 3, "justesse": "1%", "pente de calibration": 2}))
+    w("")
+    tl = tails[(tails["duree"] == "tous")].copy()
+    tl["phase"] = tl["phase"].map({2: "2", 3: "3", 4: "4"})
+    tl = tl[tl["n"] > 0]
+    w("Queues (2e moitié, 5m + 15m) : quand la formule annonce moins de 2 % (ou plus de 98 %), fréquence réelle de l'improbable :")
+    w("")
+    tl["zone"] = tl["zone"].str.replace("0.02", "0,02").str.replace("0.98", "0,98")
+    w(to_markdown(tl.drop(columns="duree").rename(columns={"attendu": "attendu (moyenne de P)", "observe": "observé", "surprises": "surprises",
+                                                           "n": "annonces"}),
+                  {"attendu (moyenne de P)": "2%", "observé": "2%"}))
+    w("")
+    w(f"Lecture : la formule brute sous-estime la variance (queues trop fines : en phase 3, {n_(tb['surprises'])} surprises sur "
+      f"{n_(tb['n'])} annonces < 2 % contre {f_(tb['n'] * tb['attendu'], 0)} attendues). La correction de σ ramène la phase 3 à "
+      f"{fmt_number(tc['observe'], 1, pct=True)} observés pour {fmt_number(tc['attendu'], 1, pct=True)} attendus, et le bruit de "
+      "source supprime les excès de confiance de fin de fenêtre (phase 4). Le Brier par instant et par σ est dans `scores_par_sigma.csv` "
+      "(TimesFM, déjà à l'échelle de la minute, est le meilleur σ brut de S−20 à S+120 ; une fois multipliés par leur k, les trois σ se valent).")
+    w("")
+
+    # 4b vs marché
+    w("### 4b. Bat-elle le marché au même instant ?")
+    w("")
+    w(f"![{figs['brier']}](brier_vs_marche.png)")
+    w("")
+    tab = sc[(sc["duree"] == "tous") & (sc["variante"] == "corrigée")].copy()
+    tab = tab.merge(st[st["variante"] == "corrigée"][["instant", "d_brier_emp_marche", "lo", "hi", "pente_ecart", "pente_lo", "pente_hi"]],
+                    on="instant")
+    tab["instant"] = tab["instant"].map(PRETTY)
+    tab["ΔBrier ×10³ [IC]"] = [f"{f_(1e3 * a, 2, True)} [{f_(1e3 * b, 2, True)} ; {f_(1e3 * c, 2, True)}]"
+                               for a, b, c in zip(tab["d_brier"], tab["d_brier_lo"], tab["d_brier_hi"])]
+    tab["empilement − marché ×10³ [IC]"] = [f"{f_(1e3 * a, 2, True)} [{f_(1e3 * b, 2, True)} ; {f_(1e3 * c, 2, True)}]"
+                                            for a, b, c in zip(tab["d_brier_emp_marche"], tab["lo"], tab["hi"])]
+    tab["pente de l'écart [IC]"] = [f"{f_(a, 2)} [{f_(b, 2)} ; {f_(c, 2)}]" for a, b, c in zip(tab["pente_ecart"], tab["pente_lo"], tab["pente_hi"])]
+    w("Formule corrigée contre dernier trade preneur, 5m + 15m. « Pente de l'écart » : régression sans constante de (issue − p_marché) sur "
+      "(P_formule − p_marché) ; 0 = l'écart n'apprend rien au-delà du marché, 1 = la formule a entièrement raison quand ils divergent.")
+    w("")
+    w(to_markdown(tab[["instant", "n", "brier_formule", "brier_marche", "ΔBrier ×10³ [IC]", "auc_formule", "auc_marche",
+                       "pente_calibration_formule", "pente_calibration_marche", "empilement − marché ×10³ [IC]", "pente de l'écart [IC]"]].rename(
+        columns={"brier_formule": "Brier formule", "brier_marche": "Brier marché", "auc_formule": "AUC formule", "auc_marche": "AUC marché",
+                 "pente_calibration_formule": "pente calib. formule", "pente_calibration_marche": "pente calib. marché"}),
+        {"Brier formule": 4, "Brier marché": 4, "AUC formule": 3, "AUC marché": 3, "pente calib. formule": 2, "pente calib. marché": 2}))
+    w("")
+    gd = H["gap_dist"]
+    gd = gd[gd["variante"] == "corrigée"].copy()
+    gd["instant"] = gd["instant"].map(PRETTY)
+    w("Distribution de l'écart P_formule (corrigée) − p_marché (2e moitié) :")
+    w("")
+    w(to_markdown(gd[["instant", "n", "moyenne", "ecart_type", "p05", "mediane", "p95", "part_abs_sup_5pts", "part_abs_sup_10pts"]].rename(
+        columns={"ecart_type": "écart-type", "mediane": "médiane", "part_abs_sup_5pts": "|écart| > 5 pts", "part_abs_sup_10pts": "|écart| > 10 pts"}),
+        {"moyenne": "+3", "écart-type": 3, "p05": "+3", "médiane": "+3", "p95": "+3", "|écart| > 5 pts": "1%", "|écart| > 10 pts": "1%"}))
+    w("")
+    w("Lecture : avant S, formule et marché sont presque toujours à moins de 5 points l'un de l'autre ; l'écart s'élargit ensuite "
+      "(plus d'information, prix plus extrêmes). Le marché est aussi bien calibré (pentes ≈ 1) et fait mieux en fin de fenêtre, où il "
+      "connaît Chainlink et où l'issue Binance diffère parfois de l'issue officielle.")
+    w("")
+
+    # 4c P&L
+    w("### 4c. Peut-on gagner, et à quelle vitesse faut-il agir ?")
+    w("")
+    w(f"![{figs['pnl']}](pnl_latence.png)")
+    w("")
+    rows = []
+    for v in ("corrigée", "brute"):
+        for g in ("tous les instants", "avant S (S−45…S−2)", "ouverture (S…S+10)", "milieu (S+30…E−60)", "fin (E−30, E−10)"):
+            d = pn[(pn["variante"] == v) & (pn["groupe"] == g)].set_index("delta_s")
+            row = {"variante": v, "instants": g, "achats": int(d.loc[0, "decisions"])}
+            row["ask estimé à t"] = c_(d.loc[-1, "pnl_par_part"])
+            for dd in fb.HIST_DELAYS:
+                r_ = d.loc[dd]
+                sig = "**" if (r_["lo"] > 0 or r_["hi"] < 0) else ""
+                row[f"δ = {int(dd)} s"] = f"{sig}{c_(r_['pnl_par_part'])}{sig}"
+            row["exécutés à δ = 2 s"] = fmt_number(d.loc[2, "taux_execution"], 0, pct=True)
+            row["surcoût à δ = 2 s"] = c_(d.loc[2, "surcout_vs_ask_estime"])
+            rows.append(row)
+    w("P&L par part (cents, frais inclus), 2e moitié ; **gras** = IC 95 % qui exclut 0. « Ask estimé à t » : exécution supposée au prix "
+      "de référence + 0,5 c (hypothèse des études précédentes). « Surcoût » : prix réellement payé − ask estimé.")
+    w("")
+    w(to_markdown(pd.DataFrame(rows)))
+    w("")
+    w(f"![{figs['heat']}](pnl_par_instant.png)")
+    w("")
+    cellsC = pn[(pn["variante"] == "corrigée") & (pn["groupe"].isin(LABELS)) & (pn["delta_s"] >= 0) & (pn["executees"] >= 30)]
+    posC = cellsC[cellsC["lo"] > 0]
+    pos_late = posC[posC["delta_s"] >= 2]
+    best_late = cellsC[cellsC["delta_s"] == 2].sort_values("pnl_par_part", ascending=False).head(2)
+    w("Lecture : le gain « papier » (ask estimé) et le gain à δ = 0–1 s viennent de prix appariés **avant** la décision. À δ = 2 s "
+      "(exécution au moment de la décision, compte tenu des ≈ 2,2 s de bloc), le surcoût payé mange l'avantage estimé : les vendeurs ont "
+      "déjà déplacé leurs prix. "
+      + (f"Les {len(posC)} cases à IC positif de la carte sont toutes à δ ≤ 1 s. " if len(pos_late) == 0 else
+         f"{len(pos_late)} case(s) à IC positif à δ ≥ 2 s : {', '.join(PRETTY[g] + ' δ=' + str(int(d)) for g, d in zip(pos_late['groupe'], pos_late['delta_s']))}. ")
+      + "À δ = 2 s, les meilleurs instants sont "
+      + " et ".join(f"{PRETTY[r['groupe']]} ({c_(r['pnl_par_part'])}, IC {c_(r['lo'])} ; {c_(r['hi'])}, {n_(r['executees'])} achats)"
+                    for _, r in best_late.iterrows())
+      + " : choisis a posteriori parmi 17, sur quelques dizaines d'achats, ce ne sont pas des résultats ; à revalider sur d'autres jours "
+      "avant d'y croire.")
+    w("")
+    mt2 = mt[(mt["moitie"] == "1re moitié") & (mt["delta_s"].isin([0, 2]))].pivot_table(
+        index=["variante", "marge"], columns="delta_s", values=["pnl_par_part", "executees"]).reset_index()
+    mt2.columns = ["variante", "marge", "achats δ = 0", "achats δ = 2 s", "P&L/part δ = 0", "P&L/part δ = 2 s"]
+    mt2["achats δ = 0"] = mt2["achats δ = 0"].astype(int)
+    mt2["achats δ = 2 s"] = mt2["achats δ = 2 s"].astype(int)
+    mt2["marge"] = [c_(x, 1) for x in mt2["marge"]]
+    mt2["P&L/part δ = 0"] = [c_(x) for x in mt2["P&L/part δ = 0"]]
+    mt2["P&L/part δ = 2 s"] = [c_(x) for x in mt2["P&L/part δ = 2 s"]]
+    w("<details><summary>Choix de la marge sur la 1re moitié (P&L par part selon la marge, δ = 0 et δ = 2 s)</summary>")
+    w("")
+    w(to_markdown(mt2[["variante", "marge", "achats δ = 0", "P&L/part δ = 0", "achats δ = 2 s", "P&L/part δ = 2 s"]]))
+    w("")
+    w("</details>")
+    w("")
+
+    # 5. carnet réel
+    if Lv and "mtab" in Lv:
+        w("## 5. Carnet réel (collecteur WebSocket, milliseconde)")
+        w("")
+        w(f"**n est petit** : {n_live} marchés BTC 5m / BTC 15m / ETH 5m du 26/09/2026 (04:30–06:05 et à partir de 10:00 UTC), "
+          "quelques créneaux de 15 min. Paramètres (demi-vie, k, décalage, bruit de source, marges) repris de l'historique BTC, y compris "
+          f"pour ETH. σ : {SIG_NAMES[Lv['sig_raw']]} (brute), {SIG_NAMES[Lv['sig_k']]} × {f_(Lv['k_live'], 2)} (corrigée) ; TimesFM n'est "
+          "pas disponible en direct. Décision à t sur le **meilleur ask réel** à t ; exécution au meilleur ask réel à t + δ "
+          f"(δ ∈ {{{', '.join(fmt_number(d, 1) for d in fb.LIVE_DELAYS)}}} s), en parcourant le carnet pour 10 et 100 parts.")
+        w("")
+        if len(Lv.get("live_book", [])):
+            lb = Lv["live_book"].copy()
+            lb["instant"] = lb["instant"].map(PRETTY)
+            lb["ecart_median"] = 100 * lb["ecart_median"]
+            w("Carnet aux instants de décision (médianes) :")
+            w("")
+            w(to_markdown(lb.rename(columns={"n": "marchés", "ecart_median": "écart bid–ask (c)", "taille_ask_up_mediane": "parts au meilleur ask Up",
+                                             "taille_ask_down_mediane": "parts au meilleur ask Down"}),
+                          {"écart bid–ask (c)": 1, "parts au meilleur ask Up": 0, "parts au meilleur ask Down": 0}))
+            w("")
+        ls = Lv.get("live_scores")
+        if ls is not None and len(ls):
+            w("Formule contre milieu du carnet au même instant (Brier ; plus bas = mieux) :")
+            w("")
+            w(to_markdown(ls[["groupe", "n", "marches", "brier_p_f", "brier_p_corr", "brier_mid", "logloss_p_corr", "logloss_mid"]].rename(
+                columns={"marches": "marchés", "brier_p_f": "Brier brute", "brier_p_corr": "Brier corrigée", "brier_mid": "Brier milieu du carnet",
+                         "logloss_p_corr": "log-loss corrigée", "logloss_mid": "log-loss milieu"}), 4))
+            w("")
+        if "live" in figs:
+            w(f"![{figs['live']}](pnl_carnet_reel.png)")
+            w("")
+            LP = Lv["live_pnl"].copy()
+            a0 = LP[LP["delta_s"] == 0].copy()
+            a0["P&L par part à δ = 0 [IC]"] = [ci_c(a, b, c) for a, b, c in zip(a0["pnl_par_part"], a0["lo"], a0["hi"])]
+            w(to_markdown(a0[["variante", "qte", "decisions", "marches", "creneaux", "taille_meilleur_ask_mediane", "part_remplie",
+                              "prix_moyen", "taux_gain", "P&L par part à δ = 0 [IC]"]].rename(
+                columns={"qte": "parts", "decisions": "décisions", "marches": "marchés", "creneaux": "créneaux",
+                         "part_remplie": "entièrement rempli", "taille_meilleur_ask_mediane": "taille au meilleur ask (méd.)",
+                         "prix_moyen": "prix moyen payé", "taux_gain": "taux de gain"}),
+                {"entièrement rempli": "0%", "taille au meilleur ask (méd.)": 0, "prix moyen payé": 3, "taux de gain": "0%"}))
+            w("")
+            rows = []
+            for (v, q), g in LP.groupby(["variante", "qte"]):
+                g = g.set_index("delta_s")
+                row = {"variante": v, "parts": int(q)}
+                for d in fb.LIVE_DELAYS:
+                    r_ = g.loc[d]
+                    sig = "**" if (r_["lo"] > 0 or r_["hi"] < 0) else ""
+                    row[f"δ = {fmt_number(d, 0 if d in (0, 1, 2, 5) else 1)} s"] = f"{sig}{c_(r_['pnl_par_part'])}{sig}"
+                rows.append(row)
+            w("P&L par part selon la latence (cents ; gras = IC qui exclut 0 ; IC complets dans `carnet_pnl.csv`) :")
+            w("")
+            w(to_markdown(pd.DataFrame(rows)))
+            w("")
+            EX = Lv["EX"]
+            e0 = EX[(EX["delta_s"] == 0) & (EX["qte"] == 10)]
+            ec = e0[e0["variante"] == "corrigée"]
+            if len(ec):
+                late = ec["instant"].isin(["S+60", "S+120", "E-90", "E-60", "E-30", "E-10"]).mean()
+                w(f"Lecture : la variante corrigée n'achète que lorsque l'écart dépasse sa marge ({c_(H['margins']['corrigée'], 0)}) : "
+                  f"{fmt_number(late, 0, pct=True)} de ses {len(ec)} achats ont lieu à S+60 s ou après, à un ask médian de "
+                  f"{f_(ec['meilleur_ask'].median(), 2)} (des « outsiders » que le marché juge peu probables) ; elle en gagne "
+                  f"{int(np.sum(np.where(ec['cote'] == 1, ec['y'], 1 - ec['y'])))}. Le carnet avait raison contre la formule. "
+                  "La brute achète plus souvent, près de 0,50, et gagne moins souvent que le prix payé ne l'exige.")
+                w("")
+        if "reaction" in figs:
+            R = Lv["reaction"]
+            w("### Délai de réaction du carnet")
+            w("")
+            w(f"![{figs['reaction']}](reaction_carnet.png)")
+            w("")
+            rr = []
+            for name, d in [("tous", R)] + [(f"phase {p}", R[R["phase"] == p]) for p in (2, 3, 4)] + \
+                    [(f"{a} {du}", g) for (a, du), g in R.groupby(["asset", "duree"])]:
+                ok = d[~d["censored"]]["delay_ms"]
+                rr.append({"groupe": name, "mouvements": len(d), "non suivis": float(d["censored"].mean()) if len(d) else math.nan,
+                           "médiane (ms)": float(ok.median()) if len(ok) else math.nan,
+                           "quartile 1 (ms)": float(ok.quantile(0.25)) if len(ok) else math.nan,
+                           "quartile 3 (ms)": float(ok.quantile(0.75)) if len(ok) else math.nan,
+                           "carnet avant la formule": float((ok <= 0).mean()) if len(ok) else math.nan,
+                           "< 347 ms": float((ok < 347).mean()) if len(ok) else math.nan})
+            w("Méthode : formule corrigée recalculée toutes les 20 ms avec le dernier trade agrégé Binance (ms) et σ figé à S−45 s ; "
+              "mouvement = |P(g) − P(g − 1 s)| > 0,05, puis 3 s sans nouveau mouvement ; délai = (premier instant où le milieu du carnet a "
+              "parcouru la moitié de ΔP depuis sa valeur à g − 1 s) − (instant où la formule a parcouru la moitié de ΔP). Horloges : "
+              "horodatage serveur Polymarket (ms) contre horodatage de trade Binance (ms).")
+            w("")
+            w(to_markdown(pd.DataFrame(rr), {"non suivis": "0%", "médiane (ms)": 0, "quartile 1 (ms)": 0, "quartile 3 (ms)": 0,
+                                             "carnet avant la formule": "0%", "< 347 ms": "0%"}))
+            w("")
+            w("Lecture : les teneurs de marché déplacent leurs prix environ un quart de seconde après Binance comptant, un peu plus vite "
+              "que les 347 ms rapportés par OpenMarket ; dans une partie des cas le carnet bouge même avant (ils suivent sans doute les "
+              "contrats à terme, qui mènent le comptant). Les mouvements de fin de fenêtre (phase 4) sont rarement suivis : près de "
+              "l'échéance, la moyenne finale est en grande partie déjà fixée et le carnet, souvent collé à 0,01 ou 0,99, ne suit plus "
+              "les petits mouvements du comptant (explication probable, non vérifiée ici). "
+              "Un preneur qui lit les bougies Binance 1 s (≈ 0,5 s de retard en moyenne sur le dernier trade) puis envoie un ordre arrive "
+              "après eux.")
+            w("")
+
+    # 6. limites
+    w("## 6. Limites")
+    w("")
+    w("* **Prix d'exécution historiques** : premier achat preneur du même jeton dans la fenêtre ; un autre preneur l'a obtenu, rien ne "
+      "garantit qu'il restait de la quantité. Les trades sont horodatés au bloc (≈ 2,2 s après l'appariement) : biais optimiste, voir § 3.")
+    w("* **Ask estimé à t** (décision historique) : prix de référence + 0,5 c ; l'écart réel est souvent de 1 c et s'ouvre à 4–5 c à S.")
+    w("* **Chainlink** : le flux officiel n'est pas disponible ; Binance décalé de 3–4 s en tient lieu. 1,6 à 2,7 % des marchés se "
+      "résolvent autrement que Binance ne l'indique : plancher d'erreur en fin de fenêtre.")
+    w("* **Carnet réel** : quelques dizaines de marchés sur une matinée, paramètres BTC appliqués à ETH ; conclusions à confirmer quand "
+      "la collecte aura couvert plusieurs jours (le collecteur continue).")
+    w("* **Tests multiples** : nombreux instants, durées, variantes et latences ; aucune correction dans les IC affichés.")
+    w("")
+
+    # 7. fichiers
+    w("## 7. Fichiers")
+    w("")
+    w("| fichier | contenu |")
+    w("|---|---|")
+    for name, desc in files:
+        w(f"| `{name}` | {desc} |")
+    for png, key in (("calibration.png", "calibration"), ("ratio_variance.png", "vr"), ("brier_vs_marche.png", "brier"),
+                     ("pnl_latence.png", "pnl"), ("pnl_par_instant.png", "heat"), ("pnl_carnet_reel.png", "live"),
+                     ("reaction_carnet.png", "reaction")):
+        if key in figs:
+            w(f"| `{png}` | {figs[key]} |")
+    w("")
+    w("Code : `src/tradebot/polymarket_formula_backtest.py` (fonctions testées), `scripts/polymarket_formula_backtest.py` (ce rapport), "
+      "`tests/test_polymarket_formula_backtest.py`. Relancer : `python scripts/polymarket_formula_backtest.py` (options `--skip-live`, "
+      "`--boot N`, `--report-only`).")
+    w("")
+    w("## 8. Temps d'exécution")
+    w("")
+    w(to_markdown(pd.DataFrame(rt.rows), {"secondes": 1}))
+    w("")
+    return "\n".join(L_)
+
+
+def args_boot(rt: Runtime) -> str:
+    return fmt_number(getattr(rt, "boot", 2000), 0)
 
 
 def main(argv=None) -> int:
@@ -1070,6 +1636,7 @@ def main(argv=None) -> int:
             H, Lv, rt = pickle.load(fh)
     else:
         rt = Runtime()
+        rt.boot = args.boot
         H = run_history(args, rt)
         H.pop("M", None)
         Lv = {} if args.skip_live else run_live(args, rt, H)

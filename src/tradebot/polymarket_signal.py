@@ -18,7 +18,9 @@ Toutes les N secondes :
    deux variations est ≈ gaussien, sans biais, d'écart-type σ_b ≈ 0,50 pb (BTC 5m + 15m, choisi sur
    le 04/09–13/09). Décision sur P = Φ(m / √(s² + σ_b²)) ; ``basis_sd = 0`` redonne la formule pure.
    Sans ce terme, s -> 0 à la clôture et la formule annonce 0 % ou 100 % même quand F − K Binance ne
-   vaut que quelques dixièmes de pb (vu en direct le 26/09 : P = 100 % contre un ask Up à 0,07) ;
+   vaut que quelques dixièmes de pb. Vu en direct le 26/09 (btc-updown-5m-1790418000, E − 2 s) :
+   F − K Binance = +0,44 pb, formule pure 100 % Up, ask Up 0,01–0,07 ; issue officielle Down
+   (F − K Chainlink = −0,42 pb). Avec σ_b : Φ(0,44/0,50) ≈ 81 % ;
 6. carnet CLOB des jetons Up et Down ; espérance d'un achat preneur de chaque côté
    (:func:`tradebot.polymarket_formula.taker_edge`, frais 0,07·a·(1 − a)) ; décision :
    acheter Up / acheter Down / rien (espérance > ``min_edge``).
