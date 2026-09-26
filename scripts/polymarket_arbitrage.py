@@ -1152,6 +1152,11 @@ def write_readme(ctx: dict, out: Path) -> None:
     (out / "README.md").write_text(render_readme(ctx), encoding="utf-8")
 
 
+def _frs(x) -> str:
+    """« 0.250 / 0.710 » -> « 0,250 / 0,710 » (chaînes de prix/tailles des CSV)."""
+    return str(x).replace(".", ",")
+
+
 def _pct(a, b, nd=1) -> str:
     return fr(100 * a / b, nd) + " %" if b else "—"
 
@@ -1203,26 +1208,29 @@ def render_readme(ctx: dict) -> str:  # noqa: C901 (rédaction)
       "**même prix final** avec deux seuils différents. Si le niveau V2 est au-dessus du niveau d'ouverture V0, « 5m#3 Up » entraîne "
       "« 15m Up » : acheter **15m Up + 5m#3 Down** paie alors toujours 1 $. Si V2 est en dessous, c'est **15m Down + 5m#3 Up**. "
       "Plus tôt dans la fenêtre, une couverture demande trois ou quatre jambes qui coûtent environ 1,5 à 2 $ : aucun cas trouvé.")
+    ep_a_size = float(ep.loc[ep["variante"] == "A", "taille_min"].median()) if len(ep) else math.nan
     if A is not None:
         w(f"* **Historique (trades, 21 jours)** : une combinaison apparemment gagnante à coup sûr apparaît dans "
           f"**{fr(A['fenetres_gt_0'], 0)} fenêtres 15m sur {fr(A['fenetres'], 0)}** ({_pct(A['fenetres_gt_0'], A['fenetres'])}). "
           f"Au-dessus de 1 c : {fr(A['fenetres_gt_1c'], 0)} fenêtres ; au-dessus de 2 c : {fr(A['fenetres_gt_2c'], 0)}. "
           f"Elle survient toujours après la clôture de #2 et dure en médiane {fr(A['duree_mediane_s'], 0)} s. Profit total sur 21 jours, "
           f"limité aux tailles réellement échangées : **{usd(A['profit_10'])} à 10 parts, {usd(A['profit_50'])} à 50 parts, "
-          f"{usd(A['profit_100'])} à 100 parts**. En payant 1 c de plus par jambe, on tombe à {usd(B['profit_100'])} (100 parts). "
-          f"Mais la même méthode « voit » un Up + Down du même marché coûtant moins de 1 $ (impossible dans le carnet) pendant "
-          f"{fr(100 * A['part_up_down_lt_1'], 1)} % des secondes. Ces détections sont donc largement du bruit : les trades sont datés au bloc (≈ 2 s).")
+          f"{usd(A['profit_100'])} à 100 parts**, avec {fr(ep_a_size, 0)} parts en médiane sur la jambe la plus mince. En payant "
+          f"1 c de plus par jambe, on tombe à {usd(B['profit_100'])} (100 parts). Mais la même méthode « voit » un Up + Down du même "
+          f"marché coûtant moins de 1 $, ce qui est impossible dans le carnet, pendant {fr(100 * A['part_up_down_lt_1'], 1)} % des "
+          f"secondes ({fr(100 * A['part_up_down_cout_lt_1'], 1)} % frais compris). Ces détections sont donc largement du bruit : "
+          "les trades sont datés au bloc (≈ 2 s).")
     if n_live:
         l0 = lat_i.loc[0] if lat_i is not None else None
-        w(f"* **Carnet réel à la milliseconde** ({fr(hours, 1)} h de fenêtres dont les quatre carnets ont été enregistrés ensemble) : "
-          f"**{n_live} violations**, durée de vie médiane **{fr(lep['duree_vie_ms'].median(), 1)} ms** (maximum "
+        w(f"* **Carnet réel à la milliseconde** ({len(linfo)} fenêtres 15m, {fr(hours, 1)} h de carnets 5m et 15m enregistrés "
+          f"ensemble le 26/09) : **{n_live} violations**, durée de vie médiane **{fr(lep['duree_vie_ms'].median(), 1)} ms** (maximum "
           f"{fr(lep['duree_vie_ms'].max(), 1)} ms), {fr(lep['taille_min_meilleur_niveau'].median(), 0)} parts disponibles en médiane "
           f"sur la jambe la plus mince. Profit garanti si l'on était servi instantanément : {usd(l0['profit_total'])} au total. "
           f"Avec **100 ms** de retard : {usd(lat_i.loc[100, 'profit_total'])} ; avec 300 ms : {usd(lat_i.loc[300, 'profit_total'])}. "
           f"**Rien n'est exécutable.**")
     else:
-        w(f"* **Carnet réel à la milliseconde** ({fr(hours, 1)} h de fenêtres dont les quatre carnets ont été enregistrés ensemble) : "
-          "**aucune violation** au meilleur ask, frais compris.")
+        w(f"* **Carnet réel à la milliseconde** ({len(linfo)} fenêtres 15m, {fr(hours, 1)} h de carnets 5m et 15m enregistrés "
+          "ensemble le 26/09) : **aucune violation** au meilleur ask, frais compris.")
     if snt is not None and len(snh):
         tot = snt.loc["Tous"]
         near = snt.loc["< 0,1 pb"]
@@ -1239,7 +1247,7 @@ def render_readme(ctx: dict) -> str:  # noqa: C901 (rédaction)
     if ex is not None:
         e = ex["episode"]
         w(f"* **Exemple réel** ({pd.Timestamp(e['rx0'], unit='ns').strftime('%d/%m %H:%M:%S.%f')[:-3]} UTC, {e['phase']}) : "
-          f"{e['portefeuille']} aux prix {e['prix_jambes']} ; coût frais compris {cents(1 - e['marge_debut'], 2)} pour un paiement "
+          f"{e['portefeuille']} aux prix {_frs(e['prix_jambes'])} ; coût frais compris {cents(1 - e['marge_debut'], 2)} pour un paiement "
           f"garanti de 1 $, soit **{cents(e['marge_debut'], 2)} de gain sûr par lot**. Mais la jambe la plus mince ne portait que "
           f"{fr(e['taille_min_meilleur_niveau'], 0)} part(s) (profit maximal {usd(e['profit_max'])}) et la situation a disparu en "
           f"**{fr(e['duree_vie_ms'], 2)} ms**.")
@@ -1248,7 +1256,7 @@ def render_readme(ctx: dict) -> str:  # noqa: C901 (rédaction)
         if len(e):
             e = e.iloc[0]
             w(f"* **Exemple (trades)** : {e['slug15']}, {e['t0_rel_s']} s après l'ouverture ({e['phase']}) : {e['portefeuille']} "
-              f"aux prix {e['prix_jambes']} → marge {cents(e['marge_debut'], 1)} par lot, {usd(e['profit_100'])} pour 100 parts.")
+              f"aux prix {_frs(e['prix_jambes'])} → marge {cents(e['marge_debut'], 1)} par lot, {usd(e['profit_100'])} pour 100 parts.")
     w("* **Verdict.** Oui, il existe des instants où une combinaison gagne à coup sûr. Mais entre marchés liés, ces instants sont "
       "rares, minuscules (quelques parts, quelques centimes) et durent moins d'une seconde : ils ne sont pas exécutables. Le vrai "
       "gain sûr, acheter le gagnant d'une quasi-égalité dans les 2 s qui entourent la clôture, suppose de recalculer le TWAP "
@@ -1345,6 +1353,7 @@ def render_readme(ctx: dict) -> str:  # noqa: C901 (rédaction)
             if len(top):
                 w("Les plus gros épisodes, variante robuste C (détail complet : `historique_episodes.csv`) :")
                 w("")
+                top = top.assign(prix_jambes=top["prix_jambes"].map(_frs), tailles_jambes=top["tailles_jambes"].map(_frs))
                 w(to_markdown(top[["slug15", "t0_rel_s", "duree_s", "portefeuille", "prix_jambes", "ages_jambes_s", "tailles_jambes",
                                    "marge_debut", "profit_100"]].rename(columns={
                     "t0_rel_s": "t (s après S)", "duree_s": "durée (s)", "prix_jambes": "prix", "ages_jambes_s": "âges (s)",
@@ -1356,7 +1365,7 @@ def render_readme(ctx: dict) -> str:  # noqa: C901 (rédaction)
           "Exemple du 10/09 : dans le même bloc, la 5m#3 Down s'échange entre 0,51 et 0,91 et la 15m Up entre 0,27 et 0,50. "
           f"L'estimateur fabrique alors des « arbitrages » impossibles. La preuve : il voit Up + Down < 1 $ sur un même marché pendant "
           f"{fr(100 * A['part_up_down_lt_1'], 1)} % (A) ou {fr(100 * C['part_up_down_lt_1'], 1)} % (C) des secondes où les deux prix "
-          "existent. Or le carnet réel ne le permet jamais (§ 5). Seul le carnet enregistré permet de dire si c'est exécutable.")
+          "existent. Or le carnet réel ne le permet jamais (§ 6). Seul le carnet enregistré permet de dire si c'est exécutable.")
         w("")
 
     # 4. carnet réel
@@ -1391,7 +1400,9 @@ def render_readme(ctx: dict) -> str:  # noqa: C901 (rédaction)
     if n_live:
         w(f"**{n_live} violations** au meilleur ask, frais compris, toutes inter-marchés (les carnets croisés sont exclus) :")
         w("")
-        w(to_markdown(lep[["slug15", "phase", "t0_rel_s", "duree_vie_ms", "portefeuille", "prix_jambes", "tailles_meilleur_niveau",
+        lep_md = lep.assign(prix_jambes=lep["prix_jambes"].map(_frs), tailles_meilleur_niveau=lep["tailles_meilleur_niveau"].map(_frs),
+                            V_sources=lep["V_sources"].str.replace(",", ", "))
+        w(to_markdown(lep_md[["slug15", "phase", "t0_rel_s", "duree_vie_ms", "portefeuille", "prix_jambes", "tailles_meilleur_niveau",
                            "marge_debut", "profit_max", "V_sources"]].rename(columns={
             "t0_rel_s": "t (s après S)", "duree_vie_ms": "durée de vie (ms)", "prix_jambes": "asks", "tailles_meilleur_niveau": "tailles",
             "marge_debut": "marge", "profit_max": "profit max ($)", "V_sources": "source des V"}),

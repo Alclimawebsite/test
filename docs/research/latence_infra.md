@@ -77,7 +77,7 @@ tous les autres preneurs**. En pratique, le premier arrivé prend la liquidité 
 **Le levier qui reste n'est pas la prise mais l'annulation.** Le délai preneur retient chaque
 ordre preneur 50 ms (non annulable) avant de le confronter au carnet. Un teneur de marché en B voit
 Binance ≈ 110 ms après le trade et fait annuler ses ordres vers ≈ 116 ms. Un preneur de classe C,
-arrivé à ≈ 73 ms, ne peut pas être apparié avant ≈ 123 ms. Pour nous, **la vitesse utile serait
+arrivé à ≈ 78 ms, ne peut pas être apparié avant ≈ 128 ms. Pour nous, **la vitesse utile serait
 celle d'un maker qui se protège, pas celle d'un preneur qui chasse** (§ 4.2). Cela ne dit rien de
 la rentabilité : le maker simulé sur le carnet réel n'a rien montré de significatif
 (`reports/polymarket/maker_live/`).
@@ -101,7 +101,7 @@ hôte et par chemin, 100 requêtes par point d'accès sur connexion chaude (50 p
 | Certificat TLS reçu | émis par « Anthropic Egress Gateway » : TLS réinterprété par une passerelle transparente | certificat réel de la cible (Google Trust Services pour Polymarket) |
 | Qui l'emprunte | tests uniquement | **les deux collecteurs** (la bibliothèque `websockets` lit `HTTPS_PROXY`) |
 
-Machine : 4 vCPU Intel Xeon à 2,8 GHz, Python 3.11. Le métadonnées Google Cloud ne sont pas
+Machine : 4 vCPU Intel Xeon à 2,8 GHz, Python 3.11. Les métadonnées Google Cloud ne sont pas
 accessibles. Sur le chemin direct, « TCP connect » (0,3 ms) et « TLS » (3 ms) mesurent la
 passerelle locale, pas la cible. La première requête d'une connexion paie la vraie poignée de main
 en amont : TTFB à froid de 156 ms pour le CLOB et de 603 ms pour Binance, contre 122 ms et 154 ms
@@ -319,7 +319,7 @@ un réseau privé optimisé ≈ 70 ms. Il n'existe pas de liaison hertzienne sur
   Ce n'est pas une contrainte pour quelques ordres par minute.
 - **Coupe-circuit.** Battement de cœur (`/v1/heartbeats` dans `py-clob-client-v2`) : sans
   battement pendant 10 s, tous les ordres ouverts sont annulés (contrôle toutes les 5 s).
-- **Taille minimale : 5 parts** (`mos: 5`) **[mesuré]**. Frais preneur : 0,07·a·(1 − a) par
+- **Taille minimale : vraisemblablement 5 parts** (champ `mos: 5` de `/clob-markets`) **[mesuré]**. Frais preneur : 0,07·a·(1 − a) par
   part, 1,75 c à 0,50. Les makers ne paient rien et reçoivent une remise (`rebateRate 0,2`).
 
 ### 2.4 Retours publics sur les robots « Binance → Polymarket » (2025–2026) [publié]
@@ -385,7 +385,7 @@ authentifié.
    comparaison.
 4. **Ordres pré-signés.** Avant l'ouverture, on signe une échelle d'ordres FAK : Up et Down ×
    prix limites au centime (0,30 → 0,70) × 2–3 tailles, soit ≈ 250 ordres. Cela prend 13 ms avec
-   `coincurve`, 0,15 s avec `py-clob-client-v2`. Au signal, on choisit l'ordre, on calcule le HMAC
+   `coincurve`, 0,14 s avec `py-clob-client-v2`. Au signal, on choisit l'ordre, on calcule le HMAC
    (4 µs) et on envoie. Aucun champ signé n'expire, mais le `salt` est unique et un ordre utilisé
    est consommé.
 
@@ -461,7 +461,7 @@ en supposant qu'on passe premier (borne haute, une matinée de données).
 | A | 216 ms | ≈ 46 % | ≈ +3,8 c | derrière les classes B et C : l'ask périmé est déjà pris |
 | B | ≈ 170 ms | ≈ 31 % | ≈ +5,0 c | derrière les classes C (les « 37–55 ms p99 » de Dublin se jouent entre robots de même classe) |
 | C | ≈ 130 ms | ≈ 20 % | ≈ +5,8 c | à égalité avec les meilleurs ; départage sur la queue (gigue, p99) |
-| A, B, C avec 250 ms de délai | 330–416 ms | 80–100 % | +1,1 c à +0,4 c (non significatif) | — |
+| A, B, C avec 250 ms de délai | 330–416 ms | ≈ 85–100 % | +1,1 c à +0,4 c (non significatif) | — |
 
 Ordre de grandeur **[estimé]** : 391 sauts de plus de 5 points en 2,75 h sur trois séries
 (rapport sur la formule), au meilleur ask ≈ 67 parts. Même en passant toujours premier avec
@@ -513,10 +513,10 @@ Mise en œuvre :
 Limites :
 
 - **La sélection adverse** ne vient pas que des arbitragistes de latence. Le maker simulé sur le
-  carnet réel (`maker_live`) montre un taux de gain de 46 % quand l'ordre est exécuté contre
-  56–72 % sinon, et aucun P&L significatif.
-- **La file d'attente.** On est derrière les ordres déjà posés au même prix : 30 à 60 parts
-  médianes avant S.
+  carnet réel (`maker_live`) montre un taux de gain de 44 à 46 % quand l'ordre est exécuté, contre
+  48 à 72 % sinon, et aucun P&L significatif.
+- **La file d'attente.** On est derrière les ordres déjà posés au même prix : 26 à 61 parts
+  en médiane avant S, selon le côté et le prix (`maker_live`).
 - **Le délai peut changer à tout moment** : trois changements en 2026.
 
 ### 4.3 Pré-positionner, découper, regrouper
