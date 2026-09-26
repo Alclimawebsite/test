@@ -36,6 +36,7 @@ OUT_DIR = REPORTS_DIR / "latence"
 SYMBOL = {"btc": "BTCUSDT", "eth": "ETHUSDT"}
 CHAINLINK = {"btc": "btc/usd", "eth": "eth/usd"}
 TAKER_DELAY_MS = 150            # délai preneur Polymarket (marchés crypto, depuis le 04/09/2026)
+TAKER_FLOOR_MS = 230            # plancher d'un preneur Tokyo → Londres, meilleur réseau privé publié (docs/research/latence_infra.md)
 GRID_S = 0.1
 PRE_S = 90                      # analyse à partir de S − 90 s
 SIGMA_HALFLIFE_S = 600.0         # demi-vie EWMA (meilleure log-loss historique, reports/polymarket/formule)
@@ -949,11 +950,17 @@ def render_readme(meta, tr, cls, mk_df, reac_sum, opp_sum, curve, crit, figs, cu
                      + (f"gain démontré jusqu'à {fms(js_is['l_sig_ms'])}." if np.isfinite(js_is["l_sig_ms"])
                         else "gain démontré à aucune latence.") if js_is is not None else ""))
         if np.isfinite(t_half):
+            # plancher d'un preneur qui lit Binance à Tokyo et envoie à Londres (meilleur réseau privé publié)
             if np.isfinite(t_sig) and t_sig < TAKER_DELAY_MS:
                 verdict = ("le seul gain démontré exige d'être apparié avant la fin du délai preneur : **impossible en "
                            "preneur**")
             elif not np.isfinite(t_sig):
                 verdict = "aucun gain n'est démontré, quelle que soit la vitesse"
+            elif t_sig < TAKER_FLOOR_MS:
+                verdict = "le gain démontré s'arrête avant ce plancher : **hors de portée d'un preneur**"
+            elif t_sig < TAKER_FLOOR_MS + 100:
+                verdict = ("le gain démontré s'arrête à moins de 100 ms au-dessus de ce plancher : **marge trop faible pour "
+                           "conclure** (voir l'audit ci-dessous)")
             else:
                 verdict = "le gain démontré reste atteignable avec une infrastructure dédiée"
             t_half_v = lhalf_v + rel if np.isfinite(lhalf_v) else t_half
@@ -1033,6 +1040,12 @@ def render_readme(meta, tr, cls, mk_df, reac_sum, opp_sum, curve, crit, figs, cu
               f"{clock_txt} ; {here_txt}")
     bl.append(f"**Échantillon petit** : {fn(meta['hours'], 1)} h, {n_mk} marchés ({n_res} résolus) ; IC larges. Relancer "
               "`python scripts/latency_study.py` quand les collecteurs auront tourné plusieurs jours.")
+    bl.append("**Audit contradictoire du 26/09/2026** (`reports/audit_8_points/README.md`) : la limite du gain démontré dépend du "
+              f"facteur σ × {fn(SIGMA_FACTOR, 2)}, calibré dans l'étude de la formule avec un décalage de 4 s (avec σ × 1,0, elle tombe "
+              "sous le plancher d'un preneur) ; le P&L réalisé vaut environ trois fois l'avantage attendu selon la formule, surtout "
+              "du bruit concentré sur deux marchés ; les marchés se chevauchent en créneaux de 5 min (bootstrap par créneau : le "
+              "gain « à l'issue » n'est plus démontré au-delà de 150 ms) ; pendant les sauts, le carnet arrive ici 15 à 100 ms plus "
+              "en retard qu'en moyenne ; l'heure étudiée est calme. **Le résultat positif n'est pas établi.**")
     L += [f"* {b}" for b in bl]
     L.append("")
     L.append("## Graphiques")

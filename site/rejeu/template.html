@@ -307,7 +307,7 @@ footer p { margin: 0; max-width: 90ch; }
   </section>
 
   <section class="card" aria-labelledby="bilan-h">
-    <h2 id="bilan-h">Bilan des études <span class="when">historique du 14/08 au 26/09/2026</span></h2>
+    <h2 id="bilan-h">Bilan des études <span class="when">après audit contradictoire, 26/09/2026</span></h2>
     <div class="bilan">
       <ul class="verdicts">
         <li><div class="q">Les indicateurs techniques prévoient-ils la direction à 5–15 min ?</div><span class="vt weak">Faible</span>
@@ -322,25 +322,27 @@ footer p { margin: 0; max-width: 90ch; }
           <p><span class="num">0</span> configuration sur 13 avec un intervalle de confiance positif. Quand un ordre au repos est exécuté, il perd plus souvent (sélection adverse de <span class="num">−4 à −26</span> points).</p></li>
         <li><div class="q">La formule exacte P(Up) = Φ(m/s) ?</div><span class="vt yes">Exacte</span>
           <p>Elle est juste et calibrée une fois σ corrigé (× 1,40). Mais elle ne bat pas le marché : le carnet l'applique déjà et suit Binance en <span class="num">≈ 0,2–0,3 s</span>. C'est elle qui tourne sur cette page.</p></li>
-        <li><div class="q">Quel temps de réaction faudrait-il ?</div><span class="vt no">Hors de portée</span>
-          <p>La moitié de l'avantage est perdue à <span class="num">182 ms</span> et le gain n'est démontré que sous <span class="num">100 ms</span>. Un preneur qui lit Binance ne descend pas sous <span class="num">260–280 ms</span>, dont <span class="num">150 ms</span> d'attente imposée par Polymarket.</p></li>
+        <li><div class="q">Quel temps de réaction faudrait-il ?</div><span class="vt weak">Non établi</span>
+          <p>Corrigée d'un double comptage, la simulation perd la moitié du gain à <span class="num">≈ 240 ms</span> et le montre jusqu'à <span class="num">≈ 300 ms</span>. C'est le plancher d'un preneur (<span class="num">≈ 230–280 ms</span>, dont <span class="num">150 ms</span> d'attente imposée), sur une seule heure calme : l'audit montre que ce résultat dépend d'une calibration empruntée.</p></li>
         <li><div class="q">Gagner à coup sûr entre marchés liés (15 min contre 5 min) ?</div><span class="vt no">Pas exécutable</span>
-          <p>Les niveaux sont bien liés (33 119 égalités sur 33 119). Mais sur 3,3 h de carnet réel : <span class="num">3</span> combinaisons gagnantes, durée médiane <span class="num">0,7 ms</span> (max. 75 ms), <span class="num">0,72 $</span> au total si servi instantanément, <span class="num">0 $</span> avec 100 ms de retard.</p></li>
+          <p>Les niveaux sont bien liés (33 119 égalités sur 33 119). Mais dans 3,3 h de carnet réel remis dans l'ordre du serveur, il n'y a <span class="num">aucune</span> combinaison gagnante à coup sûr : les 3 vues d'abord venaient de deux flux décalés de <span class="num">150 à 300 ms</span>.</p></li>
         <li><div class="q">Connaître l'issue avant la fin ?</div><span class="vt weak">Course de robots</span>
-          <p>Le TWAP final est calculable <span class="num">≈ 1,6 s</span> avant la clôture depuis le flux Chainlink. Sur 21 jours, des preneurs ont acheté le gagnant après coup sur <span class="num">125</span> marchés sur 8 043 (<span class="num">45 030 $</span>) : une course de vitesse déjà occupée.</p></li>
+          <p>Le TWAP final n'est calculable que <span class="num">≈ 0,8 s</span> avant la clôture depuis le flux Chainlink. Sur 21 jours, des preneurs ont acheté le gagnant après coup sur <span class="num">125</span> marchés sur 8 043 (<span class="num">45 030 $</span>, dont <span class="num">21 544 $</span> de quasi-égalités indécidables) : une course de vitesse déjà occupée.</p></li>
+        <li><div class="q">Faire tourner des memecoins (vendre le 3x, acheter le bas de fourchette) ?</div><span class="vt no">Non</span>
+          <p>Sur 55 memecoins Binance (retirés compris), 2024–2026 : en bas de fourchette, un memecoin refait 3x dans <span class="num">4 %</span> des cas en 60 jours et reperd 30 % dans <span class="num">50 %</span>. Sur 336 départs de 12 mois, la rotation gagne <span class="num">98</span> fois, perd <span class="num">140</span> fois et fait 98 égalités.</p></li>
       </ul>
       <div class="side">
         <div class="chart">
           <h3>Gain papier selon la latence</h3>
           <canvas id="cLat" role="img" aria-label="Gain papier en dollars par heure selon la latence, de 0 à 5 000 ms, avec intervalle de confiance à 95 %"></canvas>
-          <p class="cap">Prix périmés après un saut de Binance (212 opportunités, 0,9 h, 50 parts max., valorisés 10 s plus tard). Ligne : moyenne ; bande : IC 95 % par bootstrap.</p>
+          <p class="cap">Prix périmés après un saut de Binance (80 ordres, un par marché et par seconde, 0,9 h, 50 parts max., valorisés 10 s plus tard). Ligne : moyenne ; bande : IC 95 % par bootstrap. Une heure calme : résultat non établi.</p>
         </div>
         <div class="chart">
           <h3>Le budget d'un preneur, en ms</h3>
           <div class="ruler" id="ruler" aria-hidden="true"></div>
           <ul class="rkey">
-            <li><i style="background:var(--good-soft);border-left:2px solid var(--good)"></i><span>Gain démontré : <b>0–100 ms</b></span></li>
-            <li><i style="border-left:2px dashed var(--warn)"></i><span>Moitié de l'avantage perdue : <b>182 ms</b></span></li>
+            <li><i style="background:var(--good-soft);border-left:2px solid var(--good)"></i><span>Gain simulé, une heure calme (non établi) : <b>0–300 ms</b></span></li>
+            <li><i style="border-left:2px dashed var(--warn)"></i><span>Moitié du gain simulé perdue : <b>≈ 240 ms</b></span></li>
             <li><i style="background:var(--band);border:1px solid var(--ink-3)"></i><span>Binance (Tokyo) → serveur de Polymarket (Londres) : <b>≈ 110 ms</b></span></li>
             <li><i style="background:var(--bad-soft);border:1px solid var(--bad)"></i><span>Attente imposée aux preneurs : <b>150 ms</b>, total <b>≈ 260–280 ms</b></span></li>
           </ul>
@@ -803,8 +805,8 @@ footer p { margin: 0; max-width: 90ch; }
   function buildRuler() {
     var MAX = 400, el = $("ruler"), html = "";
     function p(ms) { return 100 * ms / MAX; }
-    html += '<div class="zone" style="left:0;width:' + p(100) + '%"></div>';
-    html += '<div class="zone half" style="left:' + p(182) + '%;width:0"></div>';
+    html += '<div class="zone" style="left:0;width:' + p(300) + '%"></div>';
+    html += '<div class="zone half" style="left:' + p(240) + '%;width:0"></div>';
     html += '<div class="segm net" style="left:0;width:' + p(110) + '%"></div>';
     html += '<div class="segm delay" style="left:' + p(110) + '%;width:' + p(150) + '%"></div>';
     html += '<div class="axis"></div>';

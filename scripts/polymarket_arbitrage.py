@@ -1246,7 +1246,7 @@ def render_readme(ctx: dict) -> str:  # noqa: C901 (rédaction)
     ex = ctx.get("timeline")
     if ex is not None:
         e = ex["episode"]
-        w(f"* **Exemple réel** ({pd.Timestamp(e['rx0'], unit='ns').strftime('%d/%m %H:%M:%S.%f')[:-3]} UTC, {e['phase']}) : "
+        w(f"* **Exemple réel, en ordre de réception local (artefact, voir l'audit ci-dessous)** ({pd.Timestamp(e['rx0'], unit='ns').strftime('%d/%m %H:%M:%S.%f')[:-3]} UTC, {e['phase']}) : "
           f"{e['portefeuille']} aux prix {_frs(e['prix_jambes'])} ; coût frais compris {cents(1 - e['marge_debut'], 2)} pour un paiement "
           f"garanti de 1 $, soit **{cents(e['marge_debut'], 2)} de gain sûr par lot**. Mais la jambe la plus mince ne portait que "
           f"{fr(e['taille_min_meilleur_niveau'], 0)} part(s) (profit maximal {usd(e['profit_max'])}) et la situation a disparu en "
@@ -1257,10 +1257,8 @@ def render_readme(ctx: dict) -> str:  # noqa: C901 (rédaction)
             e = e.iloc[0]
             w(f"* **Exemple (trades)** : {e['slug15']}, {e['t0_rel_s']} s après l'ouverture ({e['phase']}) : {e['portefeuille']} "
               f"aux prix {_frs(e['prix_jambes'])} → marge {cents(e['marge_debut'], 1)} par lot, {usd(e['profit_100'])} pour 100 parts.")
-    w("* **Verdict.** Oui, il existe des instants où une combinaison gagne à coup sûr. Mais entre marchés liés, ces instants sont "
-      "rares, minuscules (quelques parts, quelques centimes) et durent moins d'une seconde : ils ne sont pas exécutables. Le vrai "
-      "gain sûr, acheter le gagnant d'une quasi-égalité dans les 2 s qui entourent la clôture, suppose de recalculer le TWAP "
-      "Chainlink en direct et de battre des robots déjà présents. Ce n'est pas une stratégie accessible depuis la France (close-only).")
+    w("* **Audit contradictoire du 26/09/2026** (`reports/audit_8_points/README.md`) : les violations du carnet réel ci-dessus viennent de la fusion, à l'heure de réception locale, de deux connexions WebSocket décalées de 150 à 300 ms (flux 15m en retard sur le flux 5m). Remises dans l'ordre du serveur (`ts`), les 3 disparaissent, y compris l'« exemple réel » : **0 violation réelle** sur les 13 fenêtres. L'issue n'est connaissable qu'environ **0,8 s** avant la clôture (point T−2 du flux RTDS), et non 1,6 s ; et 21 544 $ des 45 030 $ du « coup sûr » viennent de quasi-égalités (écart < 0,04 pb) indécidables en temps réel.")
+    w("* **Verdict.** Non : dans le carnet réel remis dans l'ordre du serveur, aucune combinaison de marchés liés ne gagne à coup sûr, et les détections historiques sont surtout du bruit de datation. Le seul gain sûr observé, acheter le gagnant d'une quasi-égalité autour de la clôture, suppose de recalculer le TWAP Chainlink en direct et de battre des robots déjà présents. Ce n'est pas une stratégie accessible depuis la France (close-only).")
     w("")
 
     # 1. chaîne

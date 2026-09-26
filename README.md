@@ -8,20 +8,27 @@ TimesFM**, et les marchés **Polymarket « Up or Down »** comme terrain de test
 > sont sous licence **non commerciale** (production : TimesFM 2.5, Apache-2.0). Polymarket est
 > bloqué en France (ANJ) : seules les données publiques sont lues.
 
-## Verdict (données jusqu'au 25/09/2026)
+## Verdict (données jusqu'au 26/09/2026)
+
+Aucune des dix études ne trouve de moyen de prévoir Up ou Down qui rapporte après frais et latence. Chaque
+résultat positif venait d'une hypothèse d'exécution trop généreuse et a disparu une fois corrigé. Bilan complet,
+méthode comprise : document « Prévoir Up ou Down : bilan complet des études » ; audit en 8 points :
+[`reports/audit_8_points/`](reports/audit_8_points/README.md).
 
 | question | réponse | détail |
 |---|---|---|
-| Quels indicateurs prédisent la direction à 5–15 min ? | Le **retournement** : les 20 plus forts sont tous « le prix revient vers sa moyenne de l'heure » (`ema_dist_60`, `force_index_13`, `zscore_60`, `rsi_14`…). Signal stable sur 6 cryptos et sur 1 an, mais faible : IC ≤ 0,05, ≈ 52 % de bonnes directions hors échantillon. | [`reports/etat_des_lieux/`](reports/etat_des_lieux/README.md) |
-| Combiner les 167 indicateurs aide-t-il ? | À peine : gradient boosting 51,8 à 53,3 % selon l'actif et l'horizon, contre ≈ 52 % pour la seule règle « retournement ». Rien de rentable sur Binance : il faudrait ≈ 72 % pour couvrir 10 pb de frais. | idem |
-| TimesFM prévoit-il la direction ? | **Non.** 48 à 52 % sur 1 500 prévisions par actif (BTC, SOL, ETH), pas mieux que « retournement », avec ou sans indicateurs en covariables ; −10 pb par trade après frais. Il prévoit bien l'**amplitude** (quantiles calibrés), pas le sens. | [`reports/timesfm/`](reports/timesfm/README.md), [`docs/research/timesfm.md`](docs/research/timesfm.md) |
-| Polymarket 5/15 min : le marché est-il battable avant l'ouverture ? | Le prix à S−30 s est quasi aveugle (51,1 %). Nos modèles font un peu mieux (jusqu'à 52,5 % en 5m), grâce au **« TWAP partiel »** (écart spot − moyenne des 30 dernières secondes, mécanique de la règle de résolution). Mais après frais **et** le surcoût réellement payé sur ces positions (1,3 à 3,1 c par part, sélection adverse), **aucun avantage démontré**. | [`reports/polymarket/modeles_vs_marche/`](reports/polymarket/modeles_vs_marche/README.md), [`diagnostic`](reports/polymarket/diagnostic.md) |
-| Copier les top wallets Polymarket ? | **Non.** Trades récupérables à la seconde (API et on-chain, ≈ 2–3 s en temps réel), mais le classement horaire persiste à peine (ρ = 0,09) et copier le top 10 de l'heure précédente perd ≈ 1,4 c par part quel que soit le délai (0 à 60 s). Seuls les market makers gagnent durablement. | [`reports/polymarket/top_wallets/`](reports/polymarket/top_wallets/README.md), [`docs/research/polymarket_temps_reel.md`](docs/research/polymarket_temps_reel.md) |
+| Quels indicateurs prédisent la direction à 5–15 min ? | Le **retournement** vers la moyenne de l'heure : signal réel mais faible, ≈ 52 % de bonnes directions hors échantillon, contre 69,5 à 89 % nécessaires pour payer 10 pb. | [`reports/etat_des_lieux/`](reports/etat_des_lieux/README.md) |
+| TimesFM prévoit-il la direction ? | **Non** : 47 à 52 %, environ −10 pb par trade. Il prévoit bien l'**amplitude**, un peu moins bien qu'une moyenne mobile de la volatilité. | [`reports/timesfm/`](reports/timesfm/README.md), [`reports/timesfm_amplitude/`](reports/timesfm_amplitude/README.md) |
+| Polymarket 5/15 min : nos modèles battent-ils le marché ? | **Non** : +2,2 à +2,9 c par part au prix supposé, effacés par le surcoût réellement payé (1,3 à 3,1 c). | [`reports/polymarket/modeles_vs_marche/`](reports/polymarket/modeles_vs_marche/README.md) |
+| Copier les top wallets ? | **Non** : −1,38 c par part, à tout délai ; le classement horaire persiste à peine (ρ = 0,09). | [`reports/polymarket/top_wallets/`](reports/polymarket/top_wallets/README.md) |
+| Tenir le carnet (maker) ? | **Non démontré** : +0,17 c par part (IC −1,30 ; +1,67), sélection adverse. | [`reports/polymarket/maker_live/`](reports/polymarket/maker_live/README.md) |
+| Existe-t-il une formule exacte ? | **Oui** : P(Up) = Φ(m/s) pour la règle TWAP-60, calibrée (σ × 1,40). Mais le carnet l'applique en ≈ 0,24 s ; les gains historiques supposaient un prix déjà disparu. | [`reports/polymarket/formule/`](reports/polymarket/formule/README.md) |
+| Quel temps de réaction faudrait-il ? | Une fenêtre de 0,1 à 0,3 s, au niveau du plancher d'un preneur (≈ 230 ms) : **non établi** sur une heure calme (audit). | [`reports/latence/`](reports/latence/README.md) |
+| Gagner à coup sûr entre marchés liés ? | **Non** : aucune combinaison sûre réelle dans le carnet remis dans l'ordre du serveur ; l'issue n'est connue que ≈ 0,8 s avant la fin. | [`reports/polymarket/arbitrage/`](reports/polymarket/arbitrage/README.md) |
+| Rotation de memecoins (« vendre le 3x, acheter le bas de fourchette ») ? | **Non** : sur 336 départs de 12 mois, 98 gagnés, 140 perdus, 98 égalités ; aucun avantage qui se répète. | [`reports/memecoins/`](reports/memecoins/README.md) |
 
-**Piste restante** : le seul avantage mesurable est l'information du TWAP partiel à la seconde,
-du même ordre que le coût d'exécution en preneur. Il ne peut devenir exploitable qu'en **maker**
-(ordres au repos, sans frais, avec remise) — à tester en papier sur le carnet réel (WebSocket),
-en mesurant les exécutions et la sélection adverse.
+> Polymarket est bloqué en France (ANJ, 16/07/2026) et Binance n'y offre plus de trading depuis le 01/07/2026 :
+> tout ici est lecture seule et simulation papier.
 
 ## Installation
 
