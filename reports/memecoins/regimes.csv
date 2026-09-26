@@ -1,0 +1,5 @@
+regime,strategie,jours,rendement_log_an,multiple
+haussier (indice > MM 200 j),rotation,440,-1.2644936805587241,0.217768839256458
+haussier (indice > MM 200 j),panier,440,-0.18340613916761625,0.8016426594849085
+baissier (indice < MM 200 j),rotation,539,0.4396862831578744,1.914181574668216
+baissier (indice < MM 200 j),panier,539,-0.001354222251114158,0.9980022015670394

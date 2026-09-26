@@ -1,0 +1,41 @@
+{
+  "genere": "2026-09-26T15:13:22.226119+00:00",
+  "debut": "2024-01-20",
+  "fin": "2026-09-25",
+  "pieces": 55,
+  "retirees": 8,
+  "placebos": 500,
+  "boot": 2000,
+  "dsr": {
+    "sr0_per_period": 0.09903700214061238,
+    "dsr": 0.043664879196640916,
+    "n_trials": 162
+  },
+  "psr_a_priori": 0.34960234293687154,
+  "walk_forward": {
+    "coupure": "2025-05-23",
+    "variante_choisie": "mult=2 low=14 range=30 bottom=0.1 k=1",
+    "exces_log_an_1re_moitie": 1.5601195844040023,
+    "rotation_x_2e": 0.07498173534667614,
+    "panier_x_2e": 0.5336429364316781,
+    "detenteur_x_2e": 0.3277440577249572,
+    "exces_log_an_2e": -1.4648386025507365,
+    "psr_2e": 0.1331513780708875
+  },
+  "bootstrap": {
+    "rot_moins_panier_log_an": -0.24306198753487485,
+    "lo": -1.4448773048827857,
+    "hi": 0.9296794920041186,
+    "rot_moins_detenteur_log_an": -0.5699093160894533,
+    "lo_h": -1.9386674160688655,
+    "hi_h": 0.7502233992119324
+  },
+  "derniers_30_jours": {
+    "rotation (règle de l'auteur)": 1.2062925188568332,
+    "détenteur (mêmes achats de départ, aucune rotation)": 1.163165851939537,
+    "rotation inverse (vers le haut de fourchette)": 1.1484863426016108,
+    "panier équipondéré (rééquilibré tous les 30 j)": 1.3054874464029531
+  },
+  "part_placebos_battus": 0.704,
+  "runtime_s": 100.3040382862091
+}
