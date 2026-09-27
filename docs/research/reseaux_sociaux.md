@@ -252,8 +252,11 @@ Le profil d'une clé publique est un événement `kind 0` (`name, about, picture
 public renvoie en push chaque modification de profil de tout le réseau : **5,8 par minute** sur
 `relay.damus.io` (session F, 600 s, 58 événements ; 5,3 en session B), reçues **1,4 s** après `created_at`
 (médiane ; p90 9,3 s ; horloge du client émetteur, parfois fausse : on a vu des `created_at` dans le futur
-de 15 min). Les relais ne gardent que le
-dernier `kind 0` par clé (événement *remplaçable*) : l'historique dépend des archives. Pertinence crypto
+de 15 min). Le filtre `authors: [<clés>]` d'un `REQ` (NIP-01) cible directement les comptes suivis, et
+l'abonnement reste ouvert après `EOSE` : c'est un push ciblé natif, sans relation avec la cible. Les
+relais ne gardent que le dernier `kind 0` par clé (événement *remplaçable*) : l'historique dépend de
+l'observateur ou du croisement de plusieurs relais. Chaque relais fixe ses limites (NIP-11 : abonnements
+et filtres maximaux, frais éventuels) et ses conditions ; il n'y a pas de CGU centrales. Pertinence crypto
 réelle mais étroite (communauté Bitcoin).
 
 ### 3.4 Mastodon (Fediverse)
@@ -261,17 +264,44 @@ réelle mais étroite (communauté Bitcoin).
 `GET https://<instance>/api/v1/accounts/lookup?acct=<user>` : `display_name, note (HTML), avatar, header,
 fields (liens vérifiés), followers_count, following_count, statuses_count, locked, last_status_at,
 created_at`. Pas de date par champ. Quota annoncé dans les en-têtes : **300 requêtes par 5 min et par IP**
-(`x-ratelimit-limit: 300`), cache 15 s (`max-age=15`), réponse en 0,05 s. L'API de streaming publique ne
-couvre que les publications, pas les profils : c'est du *poll + diff* propre, à 1 requête par compte.
+(`x-ratelimit-limit: 300`), cache 15 s (`max-age=15`), réponse en 0,05 s. L'API de streaming ne couvre que
+les publications, pas les profils, et exige un jeton depuis Mastodon 4.2 : c'est du *poll + diff* propre,
+à 1 requête par compte (`GET /api/v1/accounts?id[]=…` pour plusieurs). Nuances : la documentation
+(08/07/2026) marque `lookup` comme réservé à un jeton utilisateur alors que `mastodon.social` le sert sans
+authentification **[mesuré]** ; chaque instance peut fermer l'API anonyme
+(`DISALLOW_UNAUTHENTICATED_API_ACCESS`) ; la copie d'un compte distant vue depuis une autre instance peut
+être périmée, il faut interroger l'instance d'origine (WebFinger). Le statut du compte est explicite :
+`suspended: true` (depuis 3.3), `limited: true` (silencié), `moved` (migré), `memorial`, `locked`
+(abonnement sur approbation) ; 404 si supprimé.
 
-### 3.5 Résumé des flux poussés
+### 3.5 Lens et GitHub
+
+**Lens (v3)** : `api.lens.xyz/graphql` sert sans authentification les métadonnées de compte (`name, bio,
+picture, coverPicture, attributes`) ; des webhooks AWS SNS poussent `AccountCreated`, `AccountFollowed` /
+`Unfollowed`, `AccountUsernameAssigned` / `Unassigned`, `AccountBlocked`, `AccountReported`,
+`AccountOwnershipTransferred`… mais **aucun sujet « métadonnées modifiées »** n'est documenté ; les
+métadonnées étant remplacées on-chain (`setAccountMetadata`), l'horodatage du bloc est la date de fait.
+Limites numériques non publiées ; conditions (27/02/2024) interdisant *spider, crawl, scrape* et la
+collecte d'informations personnelles : l'API GraphQL est la voie prévue.
+
+**GitHub** (profil « social » des développeurs et des projets) : `GET https://api.github.com/users/<login>`
+renvoie `name, company, blog, location, bio, twitter_username, followers, following, created_at` et un
+**`updated_at` du profil entier** : une requête suffit à savoir si quelque chose a changé. Quota 60
+requêtes par heure sans jeton, 5 000 avec. Ni les événements ni les webhooks ne couvrent les modifications
+de profil. Conditions (27/04/2026) : pas d'abus de l'API ; la politique d'usage autorise la recherche sur
+des informations publiques **non personnelles** si les publications qui en résultent sont en accès ouvert.
+D'ici, l'API est bloquée par la politique de la session, pas par GitHub.
+
+### 3.6 Résumé des protocoles ouverts
 
 | Réseau | Source | Couvre | Dates par champ | Délai | Contrainte |
 |---|---|---|---|---|---|
 | Bluesky | Jetstream (filtre par collection et par DID) / firehose | tous les comptes | `indexedAt` (profil), heure de l'événement, journal PLC (handle) | ≈ 0,3 s | aucune ; ≈ 2 msg/s après filtre ; CGU sans clause anti-collecte (14/08/2025), interdiction de contourner les limites |
 | Farcaster | événements de hub (HTTP paginé ou gRPC) ; webhooks Neynar `user.updated` par FID | tous les comptes | **oui** (par champ, abonnements, handles) | ≈ 1 s (blocs) | hub à jour requis : clé Neynar (plan gratuit) ou nœud propre ; événements gardés 3 jours |
-| Nostr | relais, `kind 0` | tous les comptes | **oui** (`created_at`) | ≈ 1,5 s | historique non garanti |
-| Mastodon | — | — | non | *poll* | 300 req / 5 min / IP |
+| Nostr | relais, `REQ {kinds:[0], authors:[…]}` | tous les comptes | **oui** (`created_at`, profil entier) | ≈ 1,5 s | limites par relais (NIP-11) ; historique non garanti |
+| Mastodon | — (*poll* de l'instance d'origine) | comptes publics | non (statut du compte explicite) | intervalle | 300 req / 5 min / IP ; l'instance peut fermer l'API anonyme |
+| Lens | webhooks SNS (abonnements, handle, blocages), pas les métadonnées | tous les comptes | bloc on-chain | ≈ bloc | limites non publiées ; CGU anti-*scraping*, API prévue |
+| GitHub | — (*poll*, `updated_at` du profil) | comptes publics | profil entier | intervalle | 60 req/h sans jeton, 5 000 avec ; recherche autorisée sur données non personnelles |
 
 ---
 
@@ -613,8 +643,10 @@ memecoins, études d'événement et vitesse de réaction).*
 
 - Bluesky : `public.api.bsky.app` (`app.bsky.actor.getProfile`, `getProfiles`, `com.atproto.repo.getRecord`), `plc.directory/<did>/log/audit`, Jetstream `wss://jetstream2.us-east.bsky.network/subscribe` et `wss://jetstream.us-east.bsky.network/xrpc/network.bsky.jetstream.subscribeEvents` — interrogés le 27/09/2026 ; https://bsky.network/docs/jetstream/ ; https://bsky.network/docs/jetstream-replay ; https://bsky.network/docs/rate-limits/ ; https://atproto.com/blog/relay-rollout (24/01/2026) ; lexiques `com/atproto/sync/subscribeRepos.json`, `app/bsky/actor/getProfiles.json` (github.com/bluesky-social/atproto) ; https://bsky.social/about/support/tos (14/08/2025) ; https://bsky.social/about/support/community-guidelines (19/09/2025) ; https://bsky.network/docs/developer-guidelines.
 - Farcaster : `hub.pinata.cloud/v1/{info,userDataByFid,events,userNameProofByName}`, `api.farcaster.xyz/v2/{user-by-username,user}` — interrogés le 27/09/2026 ; https://docs.neynar.com/snapchain/httpapi/userdata ; https://docs.neynar.com/snapchain/datatypes/events (rétention 3 jours) ; https://docs.neynar.com/reference/what-are-the-rate-limits-on-neynar-apis (« Plan update (June 2026) ») ; https://docs.neynar.com/reference/compute-units ; https://docs.neynar.com/reference/publish-webhook ; https://docs.farcaster.xyz/reference/fname/api ; https://docs.farcaster.xyz/reference/farcaster/api ; https://snapchain.farcaster.xyz/getting-started ; https://docs.farcaster.xyz/developers/guides/basics/hello-world (hoyt protégé par mot de passe) ; https://docs.dune.com/data-catalog/community/farcaster/user_data.
-- Nostr : `wss://relay.damus.io` — interrogé le 27/09/2026.
-- Mastodon : `mastodon.social/api/v1/accounts/lookup` — interrogé le 27/09/2026.
+- Nostr : `wss://relay.damus.io` — interrogé le 27/09/2026 ; NIP-01 https://github.com/nostr-protocol/nips/blob/master/01.md ; NIP-11 https://github.com/nostr-protocol/nips/blob/master/11.md.
+- Mastodon : `mastodon.social/api/v1/accounts/lookup` — interrogé le 27/09/2026 ; https://docs.joinmastodon.org/methods/accounts/ (08/07/2026) ; https://docs.joinmastodon.org/entities/Account/ (06/08/2026) ; https://docs.joinmastodon.org/api/rate-limits/ ; https://docs.joinmastodon.org/methods/streaming/ (01/05/2026) ; https://docs.joinmastodon.org/admin/config/ (16/04/2026).
+- Lens : https://lens.xyz/docs/protocol/getting-started/graphql ; https://lens.xyz/docs/protocol/tools/sns-notifications ; https://lens.xyz/terms (27/02/2024).
+- GitHub : https://docs.github.com/en/rest/users/users ; https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api ; https://docs.github.com/en/site-policy/github-terms/github-terms-of-service (27/04/2026) ; https://docs.github.com/en/site-policy/acceptable-use-policies/github-acceptable-use-policies.
 - Telegram : `t.me/durov`, `t.me/binance_announcements`, `t.me/binance` — interrogés le 27/09/2026.
 - X : https://docs.x.com/x-api/getting-started/pricing ; https://docs.x.com/x-api/fundamentals/rate-limits ; https://docs.x.com/x-api/users/user-lookup-by-username ; https://docs.x.com/x-api/posts/filtered-stream/introduction ; https://docs.x.com/x-api/account-activity/introduction ; https://docs.x.com/x-api/enterprise-gnip-2.0/fundamentals/firehouse ; https://docs.x.com/changelog (paiement à l'usage, 06/02/2026).
 - Instagram / Threads : https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/business_discovery ; https://developers.facebook.com/docs/instagram-platform/webhooks ; https://developers.facebook.com/docs/threads/threads-profiles ; https://developers.facebook.com/docs/threads/webhooks ; https://transparency.meta.com/researchtools/meta-content-library (mis à jour le 30/04/2026).
