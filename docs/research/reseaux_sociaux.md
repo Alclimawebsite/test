@@ -85,6 +85,7 @@ Sessions **[mesuré]** du 27/09/2026 (UTC) :
 | C | `stream --seconds 150 --confirm 40 --no-farcaster` | 16:29 → 16:32, confirmation AppView sur plus de commits |
 | D | `watch`, 7 comptes, toutes les 30 s pendant 4 min | 16:23 → 16:27 : 63 lectures |
 | E | rafales de 10 à 60 lectures par point d'accès | temps de réponse, en-têtes de cache et de quota |
+| F | `stream --seconds 600 --confirm 20 --nostr --no-farcaster` | 16:34 → 16:44, référence des débits Bluesky et Nostr |
 
 Aucune installation n'a été nécessaire hors `websockets` (17.1) et `requests`, déjà utilisés par
 `scripts/polymarket_latency.py`.
@@ -148,25 +149,27 @@ opérations `create` / `update` / `delete`, avec l'enregistrement complet), plus
 `identity` (changement de handle ou de document DID : il faut re-résoudre le handle, l'événement ne le
 porte pas) et `account` (`active`, `deactivated`, `takendown`, `suspended`, `deleted`).
 
-| Session B (180 s) | Compte | Par minute | Par jour (extrapolé) |
+| Session F (600 s) | Compte | Par minute | Par jour (extrapolé) |
 |---|---|---|---|
-| `commit` profil, `update` | 203 | 68 | ≈ 97 000 |
-| `commit` profil, `create` | 59 | 20 | ≈ 28 000 |
-| `identity` | 69 | 23 | ≈ 33 000 |
-| `account` : `active` / `deactivated` / `takendown` / `deleted` | 65 / 4 / 3 / 5 | 26 | ≈ 37 000 |
+| `commit` profil, `update` | 688 | 69 | ≈ 99 000 |
+| `commit` profil, `create` | 171 | 17 | ≈ 25 000 |
+| `identity` | 206 | 21 | ≈ 30 000 |
+| `account` : `active` / `deleted` / `deactivated` / `takendown` | 187 / 32 / 22 / 10 | 25 | ≈ 36 000 |
 
-Sur les 203 mises à jour, l'enregistrement portait un avatar dans 197 cas, une bannière dans 93, une bio
-dans 128, aucun message épinglé. Le flux complet (toutes collections) est bien plus volumineux ; filtrer
-sur `app.bsky.actor.profile` le ramène à **≈ 1,4 message par seconde**, tenable sur n'importe quelle
-machine.
+Les sessions B (180 s) et C (150 s) donnent les mêmes ordres de grandeur (87 et 80 commits de profil par
+minute). Sur les 688 mises à jour de la session F, l'enregistrement portait un avatar dans 663 cas, une
+bannière dans 358, une bio dans 465, un message épinglé dans 5. Le flux complet (toutes collections) est
+bien plus volumineux ; filtrer sur `app.bsky.actor.profile` le ramène à **≈ 2 messages par seconde**,
+tenable sur n'importe quelle machine.
 
 **Délai avant que le profil lu reflète le changement.** Pour chaque `update` reçu, le script relit
 `getProfile` (avec anti-cache) jusqu'à ce que nom et bio correspondent à l'enregistrement du commit.
-Session C (150 s, 174 mises à jour et 26 créations, soit 80 commits de profil par minute) : **40 commits
-sur 40 reflétés**, après **0,25 s** en médiane, 0,25 s au p90, **1,75 s** au maximum, aucune erreur de
-lecture (session B, n = 6 : 0,25 s / 0,70 s). Autrement dit, Jetstream *est* le temps réel, et un *poll*
-de l'AppView derrière son CDN de 30 s ne fait que le rattraper. Les 35 événements `identity` de la
-session C ne portaient pas de handle : il faut re-résoudre le compte après un tel événement.
+Session C (150 s) : **40 commits sur 40 reflétés**, après **0,25 s** en médiane, 0,25 s au p90, **1,75 s**
+au maximum ; session F (600 s) : 20 sur 20, 0,24 s en médiane, 0,37 s au p90, 0,60 s au maximum ; aucune
+erreur de lecture, aucun cas non reflété en 30 s (66 commits vérifiés en tout). Autrement dit, Jetstream
+*est* le temps réel, et un *poll* de l'AppView derrière son CDN de 30 s ne fait que le rattraper. Aucun des
+241 événements `identity` des sessions C et F ne portait de handle : il faut re-résoudre le compte après
+un tel événement.
 
 ### 3.2 Farcaster (Snapchain)
 
@@ -209,9 +212,10 @@ hub quand elles concordent, sinon la date est marquée `> <date du hub>`.
 
 Le profil d'une clé publique est un événement `kind 0` (`name, about, picture, banner, nip05, lud16`), dont
 `created_at` est la date de la modification. Un `REQ` `{"kinds":[0], "since": maintenant}` sur un relais
-public renvoie en push chaque modification de profil de tout le réseau : **5,3 par minute** sur
-`relay.damus.io` (session B, 180 s), reçues **1,5 s** après `created_at` (médiane ; horloge du client
-émetteur, parfois fausse : on a vu des `created_at` dans le futur de 15 min). Les relais ne gardent que le
+public renvoie en push chaque modification de profil de tout le réseau : **5,8 par minute** sur
+`relay.damus.io` (session F, 600 s, 58 événements ; 5,3 en session B), reçues **1,4 s** après `created_at`
+(médiane ; p90 9,3 s ; horloge du client émetteur, parfois fausse : on a vu des `created_at` dans le futur
+de 15 min). Les relais ne gardent que le
 dernier `kind 0` par clé (événement *remplaçable*) : l'historique dépend des archives. Pertinence crypto
 réelle mais étroite (communauté Bitcoin).
 
