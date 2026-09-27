@@ -424,8 +424,30 @@ Telegram. Le statut du compte se déduit : `deleted`, `USERNAME_NOT_OCCUPIED`, `
 
 ### 4.7 Reddit
 
-*À compléter avec la lecture contradictoire.* D'ici : `reddit.com/user/<u>/about.json` répond 403 sans
-navigateur, même avec un `User-Agent` descriptif.
+*Poll* uniquement, et la porte se referme. `GET https://oauth.reddit.com/user/<u>/about` (jeton OAuth
+obligatoire, `User-Agent` descriptif) renvoie `subreddit.title` (nom affiché), `subreddit.public_description`
+(bio), `icon_img` / `snoovatar_img` (avatar), `subreddit.banner_img`, `subreddit.subscribers` (abonnés,
+non documenté), karmas, `created_utc`, `verified`, `is_gold`, `is_employee`, `accept_followers`. Le handle
+ne change jamais sur Reddit (pas de renommage). Aucune date de modification. Un compte suspendu répond
+200 avec un objet tronqué (`is_suspended: true`) ; un compte supprimé, banni de l'ombre ou inexistant
+répond 404, sans qu'on puisse les distinguer.
+
+**Accès.** Les points d'accès `.json` sans authentification répondent **403 depuis le 28/05/2026**
+(annonce r/modnews « Protecting communities from scrapers and platform abuse » ; confirmé d'ici
+**[mesuré]**). Le palier gratuit est de **100 requêtes par minute** et par client OAuth (moyenne sur
+10 min), mais la *Responsible Builder Policy* (05/06/2026) exige désormais **une approbation préalable**
+avant tout accès aux données par l'API, la recherche passe par le programme *Reddit for Researchers*
+(universitaires accrédités, BigQuery, gratuit), et tout usage commercial exige un contrat sans tarif
+public (les 0,24 $ pour 1 000 appels souvent cités datent de 2023 et ne figurent sur aucune page
+officielle). Le 05/08/2026, Reddit a annoncé sur r/redditdev qu'il « restreindra progressivement toutes
+les nouvelles demandes » d'accès à la Data API publique au profit de sa plateforme Devvit.
+
+**Règles.** Conditions d'utilisation (en vigueur au 01/07/2026, § 7) : toute collecte automatisée hors
+accord écrit est interdite ; `robots.txt` interdit tout (`Disallow: /`) et Reddit a bloqué la Wayback
+Machine le 12/08/2025 ; la *Public Content Policy* interdit le « profilage individuel » ; Reddit poursuit
+les collecteurs (Anthropic, SerpApi, Oxylabs, Perplexity). Pour ce projet, Reddit n'est pas une source
+de changements de profil : ni flux, ni accès garanti, et les comptes crypto qui comptent n'y changent
+pas de profil, ils y publient.
 
 ### 4.8 Discord
 
@@ -539,5 +561,6 @@ memecoins, études d'événement et vitesse de réaction).*
 - Facebook : https://developers.facebook.com/docs/features-reference/page-public-content-access ; https://developers.facebook.com/docs/features-reference/page-public-metadata-access ; https://developers.facebook.com/docs/graph-api/webhooks/reference/page/ ; https://developers.facebook.com/docs/content-library-api/data.
 - TikTok : https://developers.tiktok.com/doc/research-api-specs-query-user-info (01/09/2026) ; https://developers.tiktok.com/doc/tiktok-api-v2-get-user-info (04/08/2026) ; https://developers.tiktok.com/doc/webhooks-events (04/08/2026) ; https://apify.com/clockworks/tiktok-profile-scraper.
 - YouTube : https://developers.google.com/youtube/v3/docs/channels/list (14/09/2026) ; https://developers.google.com/youtube/v3/docs/channels (16/09/2026) ; https://developers.google.com/youtube/v3/getting-started (quota) ; https://developers.google.com/youtube/v3/revision_history (01/06/2026, 31/01/2024) ; https://developers.google.com/youtube/v3/guides/push_notifications ; https://developers.google.com/youtube/terms/developer-policies (14/09/2026).
+- Reddit : https://support.reddithelp.com/hc/en-us/articles/16160319875092-Reddit-Data-API-Wiki (11/05/2026) ; https://support.reddithelp.com/hc/en-us/articles/42728983564564-Responsible-Builder-Policy (05/06/2026) ; https://support.reddithelp.com/hc/en-us/articles/14945211791892-Developer-Platform-Accessing-Reddit-Data (28/05/2026) ; https://redditinc.com/policies/data-api-terms (20/07/2026) ; https://redditinc.com/policies/user-agreement (01/07/2026) ; https://support.reddithelp.com/hc/en-us/articles/26410290525844-Public-Content-Policy ; https://www.reddit.com/dev/api/ ; https://praw.readthedocs.io/en/stable/code_overview/models/redditor.html.
 - Discord : https://discord.com/developers/docs/resources/user (Get User) ; https://discord.com/developers/docs/events/gateway-events (`GUILD_MEMBER_UPDATE`, `PRESENCE_UPDATE`, `USER_UPDATE`) ; https://discord.com/developers/docs/topics/rate-limits ; https://discord.com/developers/docs/policies-and-agreements/developer-policy (08/07/2024) ; https://support.discord.com/hc/en-us/articles/115002192352 (self-bots).
 - Telegram : https://core.telegram.org/bots/api (Bot API 10.3, 24/08/2026) ; https://core.telegram.org/api/updates ; https://core.telegram.org/constructor/updateUserName ; https://core.telegram.org/method/photos.getUserPhotos ; https://telegram.org/blog/privacy-discussions-web-bots (31/05/2019, aperçu `t.me`) ; https://telegram.org/tos ; https://core.telegram.org/bots/terms.
