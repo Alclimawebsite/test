@@ -484,8 +484,27 @@ conforme ; un pipeline de surveillance de personnes ne l'est pas.
 
 ### 4.9 LinkedIn
 
-*À compléter avec la lecture contradictoire.* Aucune API vers les profils tiers ; *scraping* interdit par
-les conditions d'utilisation.
+**Aucune voie conforme vers le profil d'un tiers.** L'API *Profile* ne renvoie que le membre authentifié
+(`/v2/me`, `/v2/userinfo`) ; les profils d'autres membres exigent des API à accès restreint, et la
+documentation interdit de **stocker** leurs données (cache de 24 h au plus dans les règles Marketing). Pour
+les **pages d'organisation**, la *Community Management API* (entité juridique enregistrée, examen en deux
+temps, palier Development plafonné à 500 appels par jour et par application) donne tous les champs, le
+total et les gains quotidiens d'abonnés **uniquement pour les pages que le membre administre** ; pour les
+autres organisations, `Organization Lookup` ne rend que `id, name, vanityName, website, logo, locations,
+type` et un total d'abonnés (`networkSizes`), avec interdiction de conserver autre chose que le nom et
+l'URL du logo pendant 30 jours. Le seul webhook (`ORGANIZATION_SOCIAL_ACTION_NOTIFICATIONS`) porte sur les
+réactions aux publications des pages administrées, pas sur les champs de profil. Pas de dates de
+modification (`versionTag`, opaque, réservé aux administrateurs), pas de statut de compte, pas de présence.
+
+**Le *scraping* est interdit et poursuivi.** Conditions d'utilisation (03/11/2025, § 8.2) : interdiction
+des robots, scripts et extensions qui copient les profils. LinkedIn a obtenu des jugements et injonctions
+permanentes avec destruction des données contre hiQ (décembre 2022, 500 000 $), Mantheos (2022),
+Proxycurl/Nubela (assigné en janvier 2025, service fermé le 04/07/2025) et ProAPIs (assigné en octobre
+2025, jugement d'accord rapporté le 21/09/2026). En France, la **CNIL a sanctionné Kaspr de 240 000 €
+(05/12/2024)** pour la collecte de coordonnées sur LinkedIn (art. 5-1-e, 6, 14 et 15 du RGPD). Les
+revendeurs (Bright Data 1,5 $ pour 1 000 enregistrements, Apify dès 0,30 $, People Data Labs par crédits)
+n'effacent ni la rupture contractuelle ni l'exposition RGPD de l'acheteur. **Conclusion : LinkedIn est
+hors périmètre**, sauf pour suivre les pages que l'on administre soi-même.
 
 ---
 
@@ -566,5 +585,6 @@ memecoins, études d'événement et vitesse de réaction).*
 - TikTok : https://developers.tiktok.com/doc/research-api-specs-query-user-info (01/09/2026) ; https://developers.tiktok.com/doc/tiktok-api-v2-get-user-info (04/08/2026) ; https://developers.tiktok.com/doc/webhooks-events (04/08/2026) ; https://apify.com/clockworks/tiktok-profile-scraper.
 - YouTube : https://developers.google.com/youtube/v3/docs/channels/list (14/09/2026) ; https://developers.google.com/youtube/v3/docs/channels (16/09/2026) ; https://developers.google.com/youtube/v3/getting-started (quota) ; https://developers.google.com/youtube/v3/revision_history (01/06/2026, 31/01/2024) ; https://developers.google.com/youtube/v3/guides/push_notifications ; https://developers.google.com/youtube/terms/developer-policies (14/09/2026).
 - Reddit : https://support.reddithelp.com/hc/en-us/articles/16160319875092-Reddit-Data-API-Wiki (11/05/2026) ; https://support.reddithelp.com/hc/en-us/articles/42728983564564-Responsible-Builder-Policy (05/06/2026) ; https://support.reddithelp.com/hc/en-us/articles/14945211791892-Developer-Platform-Accessing-Reddit-Data (28/05/2026) ; https://redditinc.com/policies/data-api-terms (20/07/2026) ; https://redditinc.com/policies/user-agreement (01/07/2026) ; https://support.reddithelp.com/hc/en-us/articles/26410290525844-Public-Content-Policy ; https://www.reddit.com/dev/api/ ; https://praw.readthedocs.io/en/stable/code_overview/models/redditor.html.
+- LinkedIn : https://learn.microsoft.com/en-us/linkedin/shared/integrations/people/profile-api (30/04/2026) ; https://learn.microsoft.com/en-us/linkedin/marketing/community-management/organizations/organization-lookup-api?view=li-lms-2026-09 (28/04/2026) ; https://learn.microsoft.com/en-us/linkedin/marketing/community-management/organizations/organization-social-action-notifications?view=li-lms-2026-09 (10/06/2026) ; https://www.linkedin.com/legal/user-agreement (03/11/2025) ; CNIL, sanction Kaspr (05/12/2024) : https://www.cnil.fr/fr/prospection-commerciale-et-collecte-de-donnees-sur-linkedin-sanction-de-240-000-euros-lencontre-de-kaspr.
 - Discord : https://discord.com/developers/docs/resources/user (Get User) ; https://discord.com/developers/docs/events/gateway-events (`GUILD_MEMBER_UPDATE`, `PRESENCE_UPDATE`, `USER_UPDATE`) ; https://discord.com/developers/docs/topics/rate-limits ; https://discord.com/developers/docs/policies-and-agreements/developer-policy (08/07/2024) ; https://support.discord.com/hc/en-us/articles/115002192352 (self-bots).
 - Telegram : https://core.telegram.org/bots/api (Bot API 10.3, 24/08/2026) ; https://core.telegram.org/api/updates ; https://core.telegram.org/constructor/updateUserName ; https://core.telegram.org/method/photos.getUserPhotos ; https://telegram.org/blog/privacy-discussions-web-bots (31/05/2019, aperçu `t.me`) ; https://telegram.org/tos ; https://core.telegram.org/bots/terms.
