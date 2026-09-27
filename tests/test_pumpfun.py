@@ -195,3 +195,16 @@ def test_score_logit_matches_sklearn():
     for row in X[:20]:
         got = pr.score_logit(model, dict(zip("abc", row)))
         assert got == pytest.approx(m.predict_proba(row[None])[0, 1], rel=1e-9)
+
+
+def test_post_grad_row_needs_trades_before_t():
+    """Sans trade lu avant t, pas de prix de référence : la ligne est écartée (plus de faux ×600)."""
+    tr = _trades(_events())
+    tr["program"] = "pump_amm"
+    c = _candles(np.full(20, 5e-7))
+    t = T0 + 100_000
+    td = pr.TokenData(coin=_coin(), candles=c, trades={"post_grad": tr[tr["ts"] >= t]}, grad_ms=T0, post_ms=t)
+    assert pr.token_rows(td, now_ms=T0 + 10 * 3_600_000, moments=("post_grad",)) == []
+    td.trades["post_grad"] = tr
+    rows = pr.token_rows(td, now_ms=T0 + 10 * 3_600_000, moments=("post_grad",))
+    assert len(rows) == 1 and rows[0]["p_ref"] == pytest.approx(tr.loc[tr["ts"] < t, "price_sol"].iloc[-1])

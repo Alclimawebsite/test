@@ -284,13 +284,40 @@ class TokenData:
     grad_ms: float = math.nan
     pre_ms: float = math.nan
     notes: list[str] = field(default_factory=list)
+    post_ms: float = math.nan          # instant de décision « après graduation »
+
+
+def fetch_post_grad(cli: pf.PumpFunClient, td: TokenData, ctx_pages: int = 10) -> None:
+    """Fenêtre de décision après la graduation, lue en remontant depuis t.
+
+    La bougie où la courbe finit situe la graduation à la minute près ; t = fin de cette bougie
+    + 5 min est donc au moins 5 min après le premier trade PumpSwap. La lecture part de t + 20 s
+    (pour le prix d'entrée) et remonte : si le token est très actif et la fenêtre tronquée, ce
+    sont les trades les plus anciens de la fenêtre qui manquent, jamais ceux qui précèdent t.
+    """
+    gc = graduation_ms(td.candles, td.trades.get("launch"))
+    if not np.isfinite(gc):
+        return
+    dur = td.candles.loc[td.candles["ts"] == gc, "dur"]
+    t = gc + (float(dur.iloc[0]) if len(dur) else MIN_MS) + POST_GRAD_DELAY_MS
+    tr = cli.trades(td.coin["mint"], end_ms=int(t + 20_000), start_ms=int(t - WINDOW_MS), max_pages=ctx_pages)
+    amm = tr.loc[tr["program"] == "pump_amm", "ts"]
+    if not len(amm):
+        td.notes.append("post_grad_not_located")
+        return
+    curve = tr.loc[tr["program"] == "pump", "ts"]
+    td.grad_ms = float(amm.iloc[0]) if len(curve) else gc      # graduation vue dans la fenêtre, sinon la bougie
+    td.post_ms = t
+    td.trades["post_grad"] = tr
+    if tr.attrs.get("truncated"):
+        td.notes.append("post_grad_truncated")
 
 
 def moment_times(td: TokenData) -> dict[str, float]:
     created = int(td.coin["created_timestamp"])
     t = {m: float(created + k * MIN_MS) for m, k in LAUNCH_OFFSETS.items()}
     t["pre_grad"] = td.pre_ms + 1000 if np.isfinite(td.pre_ms) else math.nan
-    t["post_grad"] = td.grad_ms + POST_GRAD_DELAY_MS if np.isfinite(td.grad_ms) else math.nan
+    t["post_grad"] = getattr(td, "post_ms", math.nan)
     return t
 
 
@@ -323,23 +350,8 @@ def fetch_token(cli: pf.PumpFunClient, coin: dict, moments: tuple[str, ...] = MO
                 td.notes.append("pre_grad_truncated")
         else:
             td.notes.append("pre_grad_not_located")
-    if "post_grad" in moments and np.isfinite(td.grad_ms):
-        # la bougie situe la fin de courbe à la minute près ; le premier trade PumpSwap la date exactement
-        gc = td.grad_ms
-        tr = cli.trades(mint, end_ms=int(gc + POST_GRAD_DELAY_MS + 2 * MIN_MS + 20_000), start_ms=int(gc - MIN_MS),
-                        max_pages=ctx_pages)
-        amm = tr.loc[tr["program"] == "pump_amm", "ts"]
-        if len(amm) and not tr.attrs.get("truncated"):
-            td.grad_ms = float(amm.iloc[0])             # premier trade PumpSwap, vu
-        elif len(amm):
-            # fenêtre tronquée : la graduation est avant le plus ancien trade lu ; t reste postérieur de 5 min
-            # au moins à la fin de courbe (bougie + 1 min), les variables portent sur les trades lus
-            td.grad_ms = gc + MIN_MS
-            td.notes.append("post_grad_truncated")
-        else:
-            td.notes.append("post_grad_not_located")
-        if np.isfinite(td.grad_ms) and len(amm):
-            td.trades["post_grad"] = tr
+    if "post_grad" in moments:
+        fetch_post_grad(cli, td, ctx_pages)
     n_launch = len(td.trades.get("launch", []))
     if dex_cli is not None and (n_launch >= dex_min_trades or np.isfinite(cross)):
         try:
@@ -371,6 +383,8 @@ def token_rows(td: TokenData, now_ms: int, costs: Costs = Costs(),
         if m.startswith("launch") and np.isfinite(td.grad_ms) and td.grad_ms <= t:
             continue                                       # déjà gradué : ce n'est plus un lancement
         before = tr[tr["ts"] < t]
+        if not m.startswith("launch") and before.empty:
+            continue                                       # aucun trade lu avant t : pas de prix de référence
         after = tr[tr["ts"] >= t + 1000 * costs.latency_s]
         feats = features_at(m, t, coin, before, td.candles, td.orders)
         p_ref = feats.get("price_sol", math.nan)

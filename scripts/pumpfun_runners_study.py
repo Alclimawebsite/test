@@ -72,6 +72,12 @@ def load_or_fetch(cli, dex_cli, coin: dict, moments: tuple[str, ...], now_ms: in
     if path.exists():
         try:
             fetched, td = pickle.loads(path.read_bytes())
+            if "post_grad" in moments and not math.isfinite(getattr(td, "post_ms", math.nan)) \
+                    and "post_grad_not_located" not in td.notes:
+                td.notes = [n for n in td.notes if not n.startswith("post_grad")]    # cache d'avant le correctif
+                td.trades.pop("post_grad", None)
+                pr.fetch_post_grad(cli, td)
+                path.write_bytes(pickle.dumps((fetched, td)))
             if reuse or fetched - int(coin["created_timestamp"]) >= FINAL_AFTER_MS:
                 td.fetched_ms = fetched
                 return td
@@ -90,7 +96,7 @@ def in_sample(mint: str, rate: float) -> bool:
 
 
 def build_dataset(workers: int, max_tokens: int, reuse: bool, costs: pr.Costs,
-                  sample_rate: float = 1.0) -> tuple[pd.DataFrame, dict]:
+                  sample_rate: float = 1.0, cached_only: bool = False) -> tuple[pd.DataFrame, dict]:
     U = pf.load_universe()
     now_ms = int(time.time() * 1000)
     info: dict = {"now_ms": now_ms}
@@ -115,6 +121,9 @@ def build_dataset(workers: int, max_tokens: int, reuse: bool, costs: pr.Costs,
     items = list(jobs.values())
     if max_tokens:
         items = items[-max_tokens:]
+    if cached_only:
+        items = [it for it in items if _cache_path(it[0]["mint"]).exists()]
+        reuse = True
     info["tokens_requested"] = len(items)
     if items:
         span = [min(c["created_timestamp"] for c, _, _ in items), max(c["created_timestamp"] for c, _, _ in items)]
@@ -390,6 +399,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--size-sol", type=float, default=0.5)
     ap.add_argument("--latency-s", type=float, default=2.0)
     ap.add_argument("--pnl-h", type=int, default=1, help="horizon (h) du P&L de la stratégie top 10 %%")
+    ap.add_argument("--cached-only", action="store_true", help="n'utiliser que les tokens déjà téléchargés")
     ap.add_argument("--report-only", action="store_true", help="relire dataset.parquet sans rien télécharger")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -400,7 +410,7 @@ def main(argv: list[str] | None = None) -> int:
         df = pd.read_parquet(OUT / "dataset.parquet")
         info = json.loads((OUT / "run.json").read_text())
     else:
-        df, info = build_dataset(a.workers, a.max_tokens, a.reuse, costs, a.sample_rate)
+        df, info = build_dataset(a.workers, a.max_tokens, a.reuse, costs, a.sample_rate, a.cached_only)
         if df.empty:
             log.error("aucune ligne : laisser tourner le collecteur")
             return 1
