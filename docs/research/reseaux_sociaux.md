@@ -354,17 +354,73 @@ même statut que ci-dessus.
 
 ### 4.5 YouTube
 
-*À compléter avec la lecture contradictoire (API Data v3 `channels.list`, quota 10 000 unités/jour, 1 unité
-par appel, clé d'API suffisante ; compteur d'abonnés arrondi à 3 chiffres significatifs ; push PubSubHubbub
-limité aux vidéos).*
+**La voie propre existe et elle est gratuite.** `GET https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics,brandingSettings,status&id=…`
+(jusqu'à **50 chaînes par appel**, ou `forHandle=@nom`) avec une simple **clé d'API** (OAuth uniquement pour
+les données privées). Champs : `snippet.title` (nom), `snippet.customUrl` (handle), `snippet.description`
+(bio), `snippet.thumbnails` (avatar), `snippet.country`, `snippet.publishedAt` (création),
+`statistics.subscriberCount` (**arrondi vers le bas à 3 chiffres significatifs**, masquable par le
+propriétaire : `hiddenSubscriberCount`), `viewCount`, `videoCount`, `brandingSettings.channel.keywords`,
+`brandingSettings.image.bannerExternalUrl` (bannière), `status.privacyStatus`. **Pas dans l'API** : liens
+du « À propos », publications de la communauté, badge de vérification, abonnements de la chaîne,
+historique des noms, date de modification. Une chaîne supprimée ou clôturée disparaît simplement de
+`items` (aucun code de raison).
+
+**Quota.** 1 unité par appel `channels.list` quel que soit le nombre d'identifiants ; **10 000 unités par
+jour** et par projet Google Cloud par défaut (depuis le 01/06/2026, `search.list` et `videos.insert` ont
+leurs propres enveloppes de 100 appels par jour). En théorie **500 chaînes toutes les 86 s** ou 5 000
+toutes les 14 min ; au-delà, un audit de conformité (formulaire d'extension) est nécessaire, le quota ne
+s'achète pas. L'ETag / `If-None-Match` (304) signale qu'un champ a changé sans dire lequel.
+
+**Pas de push pour le profil.** Le hub PubSubHubbub de YouTube ne notifie que l'envoi d'une vidéo et la
+modification d'un titre ou d'une description de vidéo. Un changement de nom « peut mettre quelques jours »
+à se propager partout (aide YouTube) : la fraîcheur du champ n'est pas garantie même en *poll* serré.
+
+**Obligations.** *Developer Policies* (page du 14/09/2026) : les données publiques non autorisées (par
+exemple les compteurs d'abonnés) ne se conservent **pas plus de 30 jours** sans autorisation du
+propriétaire de la chaîne (III.E.4.d), pas de métriques dérivées des données de l'API (III.E.4.h), pas
+d'agrégation entre chaînes de propriétaires différents (III.E.2.1), *scraping* de youtube.com interdit
+(III.E.6, III.I.14). Un historique long de changements de profil YouTube doit donc se limiter aux
+champs d'identité et à leurs dates, pas aux séries de compteurs. Les sites d'historique (Social Blade)
+et la Wayback Machine gardent d'anciens états ; Social Blade a refusé toutes nos lectures (403) et ses
+conditions n'ont pas pu être vérifiées.
 
 ### 4.6 Telegram
 
-*À compléter (page publique `t.me`, Bot API `getChat`, mises à jour MTProto `updateUserName` /
-`updateUserStatus` et leurs limites, conditions d'utilisation).* Mesuré d'ici : la page `t.me/<canal>`
-d'un canal public livre titre, description, photo et nombre d'abonnés en **0,14 s** (médiane sur 10
-lectures, p90 0,57 s), sans cache (`Cache-control: no-store`) ; pour un utilisateur ou un bot (page
-« Contact @… »), rien d'autre que le handle.
+Telegram est la seule grande plateforme fermée où **un vrai flux poussé de changements de profil existe**,
+mais il passe par l'API cliente MTProto, c'est-à-dire par **un compte utilisateur réel** (Telethon,
+Pyrogram, TDLib). Trois voies, du plus propre au plus risqué :
+
+1. **Page publique `t.me/<canal>`** (aperçu officiel depuis 2019). Sans connexion : titre, description,
+   photo, badge, nombre d'abonnés, et `t.me/s/<canal>` pour les publications avec compteurs de vues.
+   D'ici **[mesuré]** : **0,14 s** par lecture (médiane sur 10, p90 0,57 s), `Cache-control: no-store`,
+   nombre d'abonnés **exact** sur la carte du canal (`10 612 280 subscribers` pour `durov`, qui bouge à
+   chaque lecture ; la documentation tierce parle d'un arrondi, non observé ici). Pour un utilisateur ou
+   un bot, la page « Contact @… » ne livre rien : ni nom, ni photo, ni description. Limite : c'est du HTML
+   non documenté, et les conditions d'utilisation (*Content Licensing and AI Scraping Terms*) réservent
+   l'accès au contenu à « l'usage ordinaire, légitime et prévu de la plateforme ». Une lecture par minute
+   d'une poignée de canaux publics d'échanges reste dans l'esprit de l'aperçu ; un moissonnage massif non.
+2. **Bot API** (`api.telegram.org/bot<jeton>/getChat?chat_id=@canal`, gratuit, ≈ 30 requêtes par seconde
+   au total) : `title, username, active_usernames, photo, description, pinned_message, linked_chat_id,
+   location, emoji_status`, et `getChatMemberCount` pour les abonnés, **sans que le bot soit membre**. Un
+   bot ne voit **rien d'un utilisateur** qui ne lui a pas écrit (`getChat`, `getUserProfilePhotos` : « chat
+   not found »), ne reçoit **aucune mise à jour** quand un canal ou un utilisateur modifie son profil, et
+   n'a jamais accès à la présence. Conditions des bots (§ 4.3) : ne collecter que l'essentiel au service
+   rendu. C'est du *poll + diff* honnête pour des canaux.
+3. **MTProto (compte utilisateur)**. Le serveur pousse `updateUserName` (nom, handles), `updateUser`
+   (tout champ, avec le nouvel objet `user`), `updateUserEmojiStatus`, `updateChannel` (titre, photo,
+   handle d'un canal) et `updateUserStatus` (présence, selon la confidentialité) pour les pairs que le
+   compte a « vus » (contacts, dialogues ouverts, canaux rejoints ; pour les autres, la documentation ne
+   garantit rien). `users.getFullUser` / `channels.getFullChannel` (mis en cache 60 s côté serveur) servent
+   de filet, sous `FLOOD_WAIT` non documentés : `contacts.resolveUsername` peut imposer jusqu'à 24 h
+   d'attente, donc résoudre une fois et garder les identifiants. Seule cette voie donne **l'historique des
+   photos de profil avec leur date d'envoi** (`photos.getUserPhotos` → `photo.date`). Risque : tout compte
+   connecté via un client non officiel est « placé sous observation » et un comportement automatisé mène au
+   bannissement ; et cette voie ouvre la présence (`was_online`), que nous excluons.
+
+Aucun horodatage de modification pour le nom, le handle, la bio ou la description, quelle que soit la
+voie ; seules les photos sont datées. La **liste des abonnements d'un utilisateur n'existe pas** sur
+Telegram. Le statut du compte se déduit : `deleted`, `USERNAME_NOT_OCCUPIED`, `CHANNEL_PRIVATE`,
+`restricted` + `restriction_reason`, drapeaux `scam` / `fake`.
 
 ### 4.7 Reddit, Discord, LinkedIn
 
@@ -449,3 +505,5 @@ memecoins, études d'événement et vitesse de réaction).*
 - Instagram / Threads : https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/business_discovery ; https://developers.facebook.com/docs/instagram-platform/webhooks ; https://developers.facebook.com/docs/threads/threads-profiles ; https://developers.facebook.com/docs/threads/webhooks ; https://transparency.meta.com/researchtools/meta-content-library (mis à jour le 30/04/2026).
 - Facebook : https://developers.facebook.com/docs/features-reference/page-public-content-access ; https://developers.facebook.com/docs/features-reference/page-public-metadata-access ; https://developers.facebook.com/docs/graph-api/webhooks/reference/page/ ; https://developers.facebook.com/docs/content-library-api/data.
 - TikTok : https://developers.tiktok.com/doc/research-api-specs-query-user-info (01/09/2026) ; https://developers.tiktok.com/doc/tiktok-api-v2-get-user-info (04/08/2026) ; https://developers.tiktok.com/doc/webhooks-events (04/08/2026) ; https://apify.com/clockworks/tiktok-profile-scraper.
+- YouTube : https://developers.google.com/youtube/v3/docs/channels/list (14/09/2026) ; https://developers.google.com/youtube/v3/docs/channels (16/09/2026) ; https://developers.google.com/youtube/v3/getting-started (quota) ; https://developers.google.com/youtube/v3/revision_history (01/06/2026, 31/01/2024) ; https://developers.google.com/youtube/v3/guides/push_notifications ; https://developers.google.com/youtube/terms/developer-policies (14/09/2026).
+- Telegram : https://core.telegram.org/bots/api (Bot API 10.3, 24/08/2026) ; https://core.telegram.org/api/updates ; https://core.telegram.org/constructor/updateUserName ; https://core.telegram.org/method/photos.getUserPhotos ; https://telegram.org/blog/privacy-discussions-web-bots (31/05/2019, aperçu `t.me`) ; https://telegram.org/tos ; https://core.telegram.org/bots/terms.
