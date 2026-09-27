@@ -598,9 +598,49 @@ Bluesky** (25 par requête, 3 000 requêtes par 5 min), **300 comptes Mastodon p
 
 ## 6. Prestataires, archives et outils
 
-*À compléter avec la lecture contradictoire (revendeurs de données, produits « alerte de changement de
-profil » utilisés par les traders de memecoins, Wayback Machine / CDX pour reconstituer des états passés,
-outils OSINT).*
+*Pages consultées le 27/09/2026, pour la plupart non datées. Aucun de ces prestataires ne se réclame de
+l'API officielle de X ou de Meta : tous reposent sur du **scraping**, et tous reportent le risque juridique
+sur le client (clauses d'indemnisation).*
+
+**Il existe un push tiers pour les profils X.** `SocialData.tools` propose un *User Profile Monitor* : un
+webhook `profile_update` avec **anciennes et nouvelles valeurs** de `name, screen_name, location, url,
+description, profile_banner_url, profile_image_url`, « généralement sous 30 s », facturé à l'heure et par
+compte suivi : **0,0069 $/h (≈ 4,99 $ par mois) de 1 à 10 comptes**, dégressif jusqu'à 0,0035 $/h
+(≈ 2,49 $) au-delà de 1 000. Un *User Following Monitor* pousse les **nouveaux abonnements** (pas les
+désabonnements) au même tarif. Ne déclenchent rien : les compteurs, la vérification, l'épinglé, la
+suspension ; pour ceux-là, *poll* à **0,0002 $ le profil** (120 requêtes par minute). `twitterapi.io`
+(0,18 $ pour 1 000 profils ; l'objet `user` porte `unavailable` / `unavailableReason` = `suspended`) et
+`Sorsa` (ex-TweetScout, orienté crypto, « dès 0,02 $ pour 1 000 ») ne font que du *poll*. Comparé à l'API
+officielle (0,01 $ par compte et par jour, § 4.1), le *poll* tiers coûte dix à cinquante fois moins, mais
+la source peut disparaître du jour au lendemain.
+
+**Les traders de memecoins ont déjà leurs outils.** `TweetStream` vend des événements `profile-change,
+follow, unfollow, pin, delete` sur les comptes X que l'on enregistre, en WebSocket et Discord : 199 $ par
+mois pour 50 comptes, 499 $ pour 250, « Ultra Speed » dès 1 500 $ par mois pour 10 comptes, avec une
+latence annoncée de 172 ms (p50, source des données non divulguée, paiement en USDC accepté). Le *Tweet
+Monitor* d'Axiom (gratuit au-delà de 5 SOL de volume) et les bots Telegram (`Phanes`, « Crypto Tweet
+Tracker ») relaient des tweets ; leur documentation ne mentionne pas le suivi des changements de profil.
+L'existence même d'un marché à 199–1 500 $ par mois pour ces alertes indique que le signal est **déjà
+disputé** : ce qui est visible par tous en 172 ms n'est un avantage que pour celui qui exécute plus vite
+que les autres abonnés, exactement le constat de `polymarket_temps_reel.md`.
+
+**Autres plateformes : *poll* par scrapers.** Apify (X 0,15 $, TikTok 1 $, Instagram dès 1,60 $ pour
+1 000 profils ; conditions du 09/07/2026 : le client est « seul responsable de la légalité » des données),
+Bright Data (1,5 $ pour 1 000 enregistrements, 5 000 gratuits par mois ; a gagné contre Meta le 23/01/2024
+et contre X le 10/05/2024 devant le tribunal fédéral de Californie du Nord, pour du *scraping* **hors
+connexion** de données publiques), EnsembleData (dès 100 $ par mois), Data365 (dès 300 € par mois),
+HikerAPI (Instagram, 0,0006 $ la requête), Phantombuster (69 à 439 $ par mois, mais **avec la session
+connectée du client** : c'est précisément ce qui distingue les affaires perdues par Meta et X). Ces
+décisions protègent le prestataire, pas son client, sont de première instance, et ne disent rien du RGPD.
+
+**Archives : faibles pour ce besoin.** L'API CDX de la Wayback Machine (gratuite, 150 000 lignes par
+requête) date des instantanés de pages entières, mais X impose une connexion depuis le 30/06/2023 et la
+Wayback Machine signale « des limitations » sur ce site ; les pages de profil Instagram archivées « ne
+fonctionnent pas » (ArchiveTeam). `archive.today` sauve des pages `x.com` mais sans API fiable, et sa
+valeur probante est contestée (bannissement par Wikipédia le 20/02/2026). Pour Bluesky et Farcaster, le
+rejeu des événements (§ 3.1, § 3.2) remplace avantageusement les archives. Les outils OSINT (Sherlock,
+Maigret, Social Analyzer, socialscan) ne testent que l'**existence** d'un nom d'utilisateur à un instant
+donné : aucun suivi de changement.
 
 ---
 
@@ -648,6 +688,7 @@ memecoins, études d'événement et vitesse de réaction).*
 - Lens : https://lens.xyz/docs/protocol/getting-started/graphql ; https://lens.xyz/docs/protocol/tools/sns-notifications ; https://lens.xyz/terms (27/02/2024).
 - GitHub : https://docs.github.com/en/rest/users/users ; https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api ; https://docs.github.com/en/site-policy/github-terms/github-terms-of-service (27/04/2026) ; https://docs.github.com/en/site-policy/acceptable-use-policies/github-acceptable-use-policies.
 - Telegram : `t.me/durov`, `t.me/binance_announcements`, `t.me/binance` — interrogés le 27/09/2026.
+- Prestataires et archives : https://docs.socialdata.tools/monitoring/create-user-profile-monitor.md ; https://docs.socialdata.tools/monitoring/pricing/ ; https://docs.socialdata.tools/getting-started/pricing/ ; https://twitterapi.io/pricing ; https://api.sorsa.io/ ; https://tweetstream.io/pricing ; https://docs.axiom.trade/tweet-monitor.md ; https://apify.com/xquik/x-profile-scraper ; https://docs.apify.com/legal/general-terms-and-conditions (09/07/2026) ; https://brightdata.com/pricing/web-scraper (10/09/2026) ; https://ensembledata.com/pricing ; https://data365.co/pricing ; https://hikerapi.com/ ; https://phantombuster.com/blog/ai-automation/phantombuster-pricing-explained/ (21/07/2026) ; https://github.com/internetarchive/wayback/tree/master/wayback-cdx-server ; https://wiki.archiveteam.org/index.php/Twitter ; https://en.wikipedia.org/wiki/Archive.today ; https://github.com/soxoj/maigret.
 - X : https://docs.x.com/x-api/getting-started/pricing ; https://docs.x.com/x-api/fundamentals/rate-limits ; https://docs.x.com/x-api/users/user-lookup-by-username ; https://docs.x.com/x-api/posts/filtered-stream/introduction ; https://docs.x.com/x-api/account-activity/introduction ; https://docs.x.com/x-api/enterprise-gnip-2.0/fundamentals/firehouse ; https://docs.x.com/changelog (paiement à l'usage, 06/02/2026).
 - Instagram / Threads : https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/business_discovery ; https://developers.facebook.com/docs/instagram-platform/webhooks ; https://developers.facebook.com/docs/threads/threads-profiles ; https://developers.facebook.com/docs/threads/webhooks ; https://transparency.meta.com/researchtools/meta-content-library (mis à jour le 30/04/2026).
 - Facebook : https://developers.facebook.com/docs/features-reference/page-public-content-access ; https://developers.facebook.com/docs/features-reference/page-public-metadata-access ; https://developers.facebook.com/docs/graph-api/webhooks/reference/page/ ; https://developers.facebook.com/docs/content-library-api/data.
