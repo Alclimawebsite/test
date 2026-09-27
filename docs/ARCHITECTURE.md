@@ -22,6 +22,11 @@ src/tradebot/
   polymarket.py, polymarket_wallets.py
                  (annexe) lecture seule des marchés Polymarket « Up or Down » 5 min / 15 min / 4 h,
                  pour comparer nos P(hausse) aux probabilités implicites du marché
+  social_profiles.py
+                 (annexe) profils publics de réseaux sociaux en lecture seule : instantanés
+                 normalisés (Bluesky, Farcaster, Mastodon, Telegram, X), différences entre deux
+                 lectures, flux de changements des protocoles ouverts — voir
+                 docs/research/reseaux_sociaux.md et scripts/social_profile_probe.py
 ```
 
 Utilisation (venv du projet) :
@@ -73,7 +78,8 @@ l'unité par la magnitude. Les CSV peuvent avoir ou non une ligne d'en-tête.
   nuit/week-end pour les actions) — voir `targets.future_log_return`.
 * **Direction** : `y = 1` si `r_h > eps`, `0` si `r_h < -eps`, NaN sinon. `eps = 0` par défaut.
 * Aucun appel réseau hors de `data.py` (et du téléchargement des poids TimesFM), sauf les
-  modules annexes `polymarket*.py` (API publiques Polymarket, lecture seule).
+  modules annexes `polymarket*.py` (API publiques Polymarket, lecture seule) et
+  `social_profiles.py` (API publiques de réseaux sociaux, lecture seule, sans clé).
 * **Coupure apprentissage / test commune** : `split = round(train_frac × n)` barres de l'actif
   (`evaluation.indicator_scores`, origines TimesFM de `timesfm-backtest`). Apprentissage =
   barres `< split − h` (purge de h barres), test = barres `≥ split`.
@@ -244,6 +250,29 @@ exécutent toute la chaîne hors ligne. Sorties :
   `acc_w`, Diebold-Mariano sur le Brier contre `reversal_h`), `_diagnostics.csv` (couverture
   [q10, q90], ρ avec le rendement des 60 min passées, IC partiel), `_strategy.csv`,
   `_accuracy.png` ; `runs.csv` (ajout / remplacement par run) et `README.md` régénéré.
+
+### social_profiles.py (annexe, lecture seule)
+```python
+PROFILE_FIELDS = ("handle", "display_name", "bio", "avatar", "banner", "url", "location", "pinned",
+                  "followers", "following", "posts", "verified", "status")   # COUNTER_FIELDS = les 3 compteurs
+@dataclass(frozen=True)
+class ProfileSnapshot: platform, account, fetched_at, fields: dict, changed_at: dict, raw: dict
+    # changed_at : date ISO de dernière modification par champ quand la plateforme la donne
+    # (Farcaster : chaque champ ; Bluesky : "*" = indexedAt ; X / Telegram / Mastodon : rien)
+def parse_bluesky_profile(d) / parse_farcaster_user_data(messages, fid) / parse_farcaster_client_user(d)
+def parse_mastodon_account(d) / parse_telegram_page(html, username) / parse_x_user(d)   # purs, sans réseau
+def diff_snapshots(old, new, *, counters=False, fields=None) -> list[FieldChange]   # même compte requis
+def counter_deltas(old, new) -> dict[str, int]
+def farcaster_time(ts) -> datetime            # époque Farcaster = 2021-01-01 UTC
+def farcaster_profile_events(events) -> Iterator[dict]   # filtre USER_DATA_ADD d'un journal de hub
+class SocialClient(session=None, *, hub_url=..., x_bearer_token=None)
+    bluesky(actor, fresh=True) ; bluesky_many(actors) ; bluesky_profile_record(did) ; bluesky_handle_history(did)
+    farcaster(fid=None, username=None, source="both"|"hub"|"client") ; farcaster_hub_lag()
+    farcaster_events_tail() ; farcaster_events(from_event_id, page_size=1000)
+    mastodon("user@instance") ; telegram(channel) ; x_user(username)   # X : jeton Bearer obligatoire
+```
+`session` injectable (tests hors ligne avec de fausses réponses). `fresh=True` ajoute un paramètre
+anti-cache : l'AppView public Bluesky est derrière un CDN qui garde chaque URL 30 s.
 
 ## Temps et mémoire mesurés (VM 4 CPU partagée, 25/09/2026)
 

@@ -26,6 +26,7 @@ méthode comprise : document « Prévoir Up ou Down : bilan complet des études 
 | Quel temps de réaction faudrait-il ? | Une fenêtre de 0,1 à 0,3 s, au niveau du plancher d'un preneur (≈ 230 ms) : **non établi** sur une heure calme (audit). | [`reports/latence/`](reports/latence/README.md) |
 | Gagner à coup sûr entre marchés liés ? | **Non** : aucune combinaison sûre réelle dans le carnet remis dans l'ordre du serveur ; l'issue n'est connue que ≈ 0,8 s avant la fin. | [`reports/polymarket/arbitrage/`](reports/polymarket/arbitrage/README.md) |
 | Rotation de memecoins (« vendre le 3x, acheter le bas de fourchette ») ? | **Non** : sur 336 départs de 12 mois, 98 gagnés, 140 perdus, 98 égalités ; aucun avantage qui se répète. | [`reports/memecoins/`](reports/memecoins/README.md) |
+| Peut-on voir les changements de profil sur les réseaux sociaux ? | **Oui, selon le réseau** : flux poussé gratuit à ≈ 1 s sur Bluesky, Farcaster et Nostr (mesuré : l'AppView Bluesky reflète un changement 0,25 s après le firehose) ; sur X, Instagram, TikTok, YouTube, Telegram, seulement en relisant le profil et en comparant (X : 0,01 $ par compte et par jour, 300 requêtes / 15 min ; Meta et TikTok : accès sous conditions). Aucune plateforme fermée ne date les changements. | [`docs/research/reseaux_sociaux.md`](docs/research/reseaux_sociaux.md) |
 
 > Polymarket est bloqué en France (ANJ, 16/07/2026) et Binance n'y offre plus de trading depuis le 01/07/2026 :
 > tout ici est lecture seule et simulation papier.
@@ -54,6 +55,8 @@ python scripts/polymarket_diagnostic.py                # règles, proxies, basel
 python -m tradebot.polymarket_wallets --hours 48       # trades à la seconde, P&L par wallet
 python scripts/polymarket_top_wallets.py               # top wallets, persistance, copy-trading
 python scripts/polymarket_models_vs_market.py          # nos modèles contre le prix Polymarket
+python scripts/social_profile_probe.py stream --seconds 120   # flux de changements de profil (Bluesky, Farcaster, Nostr)
+python scripts/social_profile_probe.py watch --bluesky bsky.app --farcaster dwr --telegram durov --interval 60 --minutes 10
 pytest -m "not network and not slow"                   # tests hors-ligne
 ```
 
@@ -66,8 +69,9 @@ src/tradebot/
   evaluation.py               IC (global, par jour, Newey-West), hit-rate/AUC hors échantillon, FDR, modèles combinés
   forecaster.py backtest.py   TimesFM 3.0 / 2.5, P(hausse) depuis les quantiles ; walk-forward vs baselines
   polymarket*.py              client lecture seule, trades par wallet, backtest modèles vs marché
+  social_profiles.py          profils publics de réseaux sociaux : instantanés, différences, flux de changements
   report.py cli.py            rapports (CSV, Markdown, PNG) et ligne de commande
 docs/ARCHITECTURE.md          contrat entre modules
-docs/research/                TimesFM, indicateurs, données, méthodologie, Polymarket, temps réel
+docs/research/                TimesFM, indicateurs, données, méthodologie, Polymarket, temps réel, réseaux sociaux
 reports/                      résultats (chaque dossier a son README)
 ```
