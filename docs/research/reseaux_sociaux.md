@@ -422,11 +422,44 @@ voie ; seules les photos sont datées. La **liste des abonnements d'un utilisate
 Telegram. Le statut du compte se déduit : `deleted`, `USERNAME_NOT_OCCUPIED`, `CHANNEL_PRIVATE`,
 `restricted` + `restriction_reason`, drapeaux `scam` / `fake`.
 
-### 4.7 Reddit, Discord, LinkedIn
+### 4.7 Reddit
 
 *À compléter avec la lecture contradictoire.* D'ici : `reddit.com/user/<u>/about.json` répond 403 sans
-navigateur ; `discord.com/api` exige un jeton et ne livre la bio ou le statut d'un tiers qu'à un bot présent
-dans un serveur commun ; LinkedIn n'offre aucune API vers les profils tiers et interdit le *scraping*.
+navigateur, même avec un `User-Agent` descriptif.
+
+### 4.8 Discord
+
+**Pour un compte quelconque**, un bot (jeton gratuit, aucun consentement de la cible) peut lire
+`GET /users/{id}` : `username, global_name` (nom affiché), `avatar, banner, accent_color, public_flags,
+avatar_decoration_data, primary_guild` (étiquette de serveur). **Jamais** la bio (« À propos de moi »), les
+pronoms, le statut personnalisé, la présence ni les activités, et **aucun événement** ne pousse les
+changements d'un utilisateur hors de vos serveurs (`USER_UPDATE` ne concerne que le compte du bot). C'est
+donc du *poll + diff* sur les seuls champs d'identité, sous **50 requêtes par seconde** par bot (limites
+par route dans les en-têtes `X-RateLimit-*`, bannissement d'IP au-delà de 10 000 requêtes invalides par
+10 min). Un compte supprimé répond 404 ; il n'existe ni notion de compte privé (la confidentialité de
+profil masque bio, statut et badges aux non-amis, jamais le nom, l'avatar et la bannière), ni champ de
+suspension, ni horodatage.
+
+**Dans un serveur où le bot est installé** (par exemple le Discord officiel d'un projet), un flux poussé
+existe : `GUILD_MEMBER_UPDATE` (intent privilégié `GUILD_MEMBERS`) part à chaque changement de pseudo, de
+rôle, d'avatar de serveur, **et quand l'objet utilisateur d'un membre change** (nom, nom affiché, avatar,
+bannière) ; `PRESENCE_UPDATE` (intent `GUILD_PRESENCES`) donne en ligne / absent / ne pas déranger et les
+activités, dont le statut personnalisé (omis depuis le 17/09/2026 quand l'utilisateur le réserve à ses
+amis). Ces deux intents se cochent librement sous 10 000 utilisateurs uniques ; au-delà, examen par Discord
+(règle du 10/06/2026, qui remplace celle des 100 serveurs). Nous excluons la présence de toute façon.
+
+**Règles.** *Developer Policy* (en vigueur depuis le 08/07/2024) : interdiction d'extraire ou de
+moissonner des données (clause 20), d'utiliser les données de l'API pour **profiler des utilisateurs**
+(clause 16) ou au-delà de la fonction déclarée de l'application (clause 15), de les vendre (18) ; les
+*self-bots* (automatiser un compte utilisateur, seule façon d'obtenir la bio d'un tiers) sont interdits
+sous peine de fermeture du compte. Un suivi des comptes officiels d'échanges et de projets **dans leurs
+propres serveurs**, avec une fonction déclarée et une politique de confidentialité, est le seul schéma
+conforme ; un pipeline de surveillance de personnes ne l'est pas.
+
+### 4.9 LinkedIn
+
+*À compléter avec la lecture contradictoire.* Aucune API vers les profils tiers ; *scraping* interdit par
+les conditions d'utilisation.
 
 ---
 
@@ -506,4 +539,5 @@ memecoins, études d'événement et vitesse de réaction).*
 - Facebook : https://developers.facebook.com/docs/features-reference/page-public-content-access ; https://developers.facebook.com/docs/features-reference/page-public-metadata-access ; https://developers.facebook.com/docs/graph-api/webhooks/reference/page/ ; https://developers.facebook.com/docs/content-library-api/data.
 - TikTok : https://developers.tiktok.com/doc/research-api-specs-query-user-info (01/09/2026) ; https://developers.tiktok.com/doc/tiktok-api-v2-get-user-info (04/08/2026) ; https://developers.tiktok.com/doc/webhooks-events (04/08/2026) ; https://apify.com/clockworks/tiktok-profile-scraper.
 - YouTube : https://developers.google.com/youtube/v3/docs/channels/list (14/09/2026) ; https://developers.google.com/youtube/v3/docs/channels (16/09/2026) ; https://developers.google.com/youtube/v3/getting-started (quota) ; https://developers.google.com/youtube/v3/revision_history (01/06/2026, 31/01/2024) ; https://developers.google.com/youtube/v3/guides/push_notifications ; https://developers.google.com/youtube/terms/developer-policies (14/09/2026).
+- Discord : https://discord.com/developers/docs/resources/user (Get User) ; https://discord.com/developers/docs/events/gateway-events (`GUILD_MEMBER_UPDATE`, `PRESENCE_UPDATE`, `USER_UPDATE`) ; https://discord.com/developers/docs/topics/rate-limits ; https://discord.com/developers/docs/policies-and-agreements/developer-policy (08/07/2024) ; https://support.discord.com/hc/en-us/articles/115002192352 (self-bots).
 - Telegram : https://core.telegram.org/bots/api (Bot API 10.3, 24/08/2026) ; https://core.telegram.org/api/updates ; https://core.telegram.org/constructor/updateUserName ; https://core.telegram.org/method/photos.getUserPhotos ; https://telegram.org/blog/privacy-discussions-web-bots (31/05/2019, aperçu `t.me`) ; https://telegram.org/tos ; https://core.telegram.org/bots/terms.
