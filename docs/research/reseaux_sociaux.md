@@ -19,7 +19,7 @@ réseau.** Il y a trois régimes :
 
 | Régime | Réseaux | Ce qu'on voit | Délai | Coût |
 |---|---|---|---|---|
-| **Flux poussé** : le réseau publie chaque modification de profil de tous ses utilisateurs | **Bluesky** (Jetstream / firehose), **Farcaster** (journal d'événements des hubs), **Nostr** (événements `kind 0`) | nom, bio, avatar, bannière, épinglé, handle, statut du compte (Bluesky) ; chaque champ avec sa date (Farcaster, Nostr) | **≈ 1 s** ; l'AppView public Bluesky reflète un changement **0,25 s** (médiane) après le firehose **[mesuré]** | gratuit, sans clé (Farcaster : hub public en retard de 10 mois d'ici, voir § 3.2) |
+| **Flux poussé** : le réseau publie chaque modification de profil de tous ses utilisateurs | **Bluesky** (Jetstream / firehose), **Farcaster** (journal d'événements des hubs, webhooks Neynar par FID), **Nostr** (événements `kind 0`) | nom, bio, avatar, bannière, épinglé, handle, statut du compte (Bluesky) ; chaque champ avec sa date (Farcaster, Nostr) ; abonnements datés (Farcaster) | **≈ 1 s** ; l'AppView public Bluesky reflète un changement **0,25 s** (médiane) après le firehose **[mesuré]** | gratuit : sans clé (Bluesky, Nostr) ou avec une clé gratuite Neynar (Farcaster ; le seul hub sans clé joignable d'ici a 10 mois de retard, § 3.2) |
 | **Interrogation + comparaison** (*poll + diff*) : on relit le profil et on compare à l'instantané précédent | **X**, **Instagram / Threads / Facebook**, **TikTok**, **YouTube**, **Telegram**, **Reddit**, **Mastodon**, API du client Farcaster | les champs que l'API expose ; jamais la date du changement | l'intervalle d'interrogation, borné par le quota : de **30 s** (Bluesky via CDN, Telegram) à **plusieurs heures** (Instagram, TikTok) | X : **0,01 $ par compte et par jour** (plafond, dédoublonnage 24 h) ; Meta / TikTok : gratuit mais accès sous conditions (compte pro, App Review, ou API recherche académique) ; les scrapers tiers coûtent 0,2 à 2 $ pour 1 000 profils mais violent les CGU |
 | **Horodatage fourni** : la plateforme dit *quand* chaque champ a changé, sans qu'on ait observé le changement | **Farcaster** (par champ), **Bluesky** (`indexedAt` du profil ; historique des handles dans le journal PLC), **GitHub** (`updated_at`) | historique reconstituable | — | gratuit |
 
@@ -204,17 +204,39 @@ Solana 26, localisation 11, compte X lié 8, lien 7, bannière 1. Les réactions
 abonnements (`LINK_ADD`, 11 %) dominent le flux. Le protocole est gratuit et public par construction ; en
 gRPC (`SubscribeEvents`) le même journal arrive en push.
 
-**Mais le seul hub public joignable d'ici est en retard de dix mois.** `/v1/info` de `hub.pinata.cloud`
+Le même journal donne les **abonnements** (`MESSAGE_TYPE_LINK_ADD` / `LINK_REMOVE`, horodatés ; à la
+demande : `/v1/linksByFid`, `/v1/linksByTargetFid`) : « tel fonds vient de suivre tel projet » est un
+événement daté, gratuit. Les transferts de noms d'utilisateur sont un journal public horodaté
+(`fnames.farcaster.xyz/transfers`) : historique complet des handles. Le protocole ne connaît ni compte
+privé ni suspension : un bannissement est propre à chaque application (Farcaster app, Neynar) et invisible
+aux tiers ; la suppression se voit indirectement (messages retirés, transfert du FID on-chain, expiration
+du stockage). Les nœuds ne conservent les événements que **3 jours** : un historique long se construit
+soi-même, ou via les jeux de données Neynar / Dune (rafraîchis toutes les ≈ 12 h).
+
+**Mais le seul hub sans clé joignable d'ici est en retard de dix mois.** `/v1/info` de `hub.pinata.cloud`
 (version 0.14.2) annonce `blockDelay ≈ 25,5 millions de blocs` par shard ; la queue de son journal porte
 des messages horodatés du **6 décembre 2025** et avance de **≈ 50 événements par minute** (session B :
 147 événements en 180 s, dont 0 changement de profil), soit une resynchronisation au compte-gouttes. La
 première mesure avait d'ailleurs pris ce retard pour du direct : 39 000 événements en 60 s, exactement
 1 000 par page, c'est un arriéré qu'on rembobine, pas un flux. **Vérifier `blockDelay` avant toute
-mesure** (`SocialClient.farcaster_hub_lag()`). Les autres hubs publics écoutent sur des ports non standard
-(2281, 3381) que notre proxy bloque ; Neynar facture chaque requête (HTTP 402). Pour du direct, il faut donc
-soit un serveur sans ce filtrage, soit un hub payant, soit faire tourner son propre nœud Snapchain.
+mesure** (`SocialClient.farcaster_hub_lag()`). La documentation officielle ne recense d'ailleurs **aucun
+hub public sans clé en 2026** (`hoyt.farcaster.xyz` est protégé par mot de passe ; le hub Pinata n'est plus
+documenté) et renvoie vers Neynar ou vers son propre nœud. Les autres hubs écoutent sur des ports non
+standard (2281, 3381) que notre proxy bloque. Options pour du direct :
 
-**L'API du client Farcaster est en direct, gratuite et non documentée.** `GET https://api.farcaster.xyz/v2/user-by-username?username=dwr`
+- **Neynar** (propriétaire de Farcaster depuis janvier 2026) : plan **gratuit** avec clé d'API (10 M
+  crédits par mois, 600 requêtes par minute et par point d'accès, 10 webhooks ; page « Plan update (June
+  2026) »), qui inclut le hub hébergé (`snapchain-api.neynar.com`, gRPC `hub-grpc-api.neynar.com`) et des
+  **webhooks `user.updated` filtrés par FID** (10 crédits par événement) et `follow.created` /
+  `follow.deleted` avec `target_fids` (15 crédits) : un push ciblé, sans consentement de la cible. Palier
+  Scale 249 $ par mois ; paiement à l'appel possible en x402 (0,001 USDC). C'est le 402 que nous avons reçu
+  sans clé. Le flux Kafka de Neynar a été retiré en août 2026 au profit des webhooks.
+- **Son propre nœud Snapchain** : 16 Go de RAM, 4 cœurs, 1,5 à 2 To de disque, ports 3381-3383 ouverts ;
+  flux complet en local, sans clé ni conditions.
+
+**L'API du client Farcaster est en direct, gratuite et non documentée** (la référence officielle ne liste
+que les points d'accès d'invitation aux canaux ; les conditions d'utilisation de l'application n'ont pas pu
+être lues, page rendue en JavaScript). `GET https://api.farcaster.xyz/v2/user-by-username?username=dwr`
 (ou `/v2/user?fid=3` ; alias `api.warpcast.com`, `client.farcaster.xyz`) renvoie nom, handle, avatar, bio,
 localisation, lien, bannière, **abonnés et abonnements**, en **0,07 s** (médiane sur 20 lectures, p90
 0,09 s), sans cache (`CF-Cache-Status: DYNAMIC`) et sans en-tête de quota. Aucun horodatage. Elle a
@@ -247,7 +269,7 @@ couvre que les publications, pas les profils : c'est du *poll + diff* propre, à
 | Réseau | Source | Couvre | Dates par champ | Délai | Contrainte |
 |---|---|---|---|---|---|
 | Bluesky | Jetstream (filtre par collection et par DID) / firehose | tous les comptes | `indexedAt` (profil), heure de l'événement, journal PLC (handle) | ≈ 0,3 s | aucune ; ≈ 2 msg/s après filtre ; CGU sans clause anti-collecte (14/08/2025), interdiction de contourner les limites |
-| Farcaster | événements de hub (HTTP paginé ou gRPC) | tous les comptes | **oui** | ≈ 1 s (blocs) | hub à jour requis (payant ou nœud propre, ou ports ouverts) |
+| Farcaster | événements de hub (HTTP paginé ou gRPC) ; webhooks Neynar `user.updated` par FID | tous les comptes | **oui** (par champ, abonnements, handles) | ≈ 1 s (blocs) | hub à jour requis : clé Neynar (plan gratuit) ou nœud propre ; événements gardés 3 jours |
 | Nostr | relais, `kind 0` | tous les comptes | **oui** (`created_at`) | ≈ 1,5 s | historique non garanti |
 | Mastodon | — | — | non | *poll* | 300 req / 5 min / IP |
 
@@ -590,7 +612,7 @@ memecoins, études d'événement et vitesse de réaction).*
 *(complétées avec la lecture contradictoire)*
 
 - Bluesky : `public.api.bsky.app` (`app.bsky.actor.getProfile`, `getProfiles`, `com.atproto.repo.getRecord`), `plc.directory/<did>/log/audit`, Jetstream `wss://jetstream2.us-east.bsky.network/subscribe` et `wss://jetstream.us-east.bsky.network/xrpc/network.bsky.jetstream.subscribeEvents` — interrogés le 27/09/2026 ; https://bsky.network/docs/jetstream/ ; https://bsky.network/docs/jetstream-replay ; https://bsky.network/docs/rate-limits/ ; https://atproto.com/blog/relay-rollout (24/01/2026) ; lexiques `com/atproto/sync/subscribeRepos.json`, `app/bsky/actor/getProfiles.json` (github.com/bluesky-social/atproto) ; https://bsky.social/about/support/tos (14/08/2025) ; https://bsky.social/about/support/community-guidelines (19/09/2025) ; https://bsky.network/docs/developer-guidelines.
-- Farcaster : `hub.pinata.cloud/v1/{info,userDataByFid,events,userNameProofByName}`, `api.farcaster.xyz/v2/{user-by-username,user}` — interrogés le 27/09/2026.
+- Farcaster : `hub.pinata.cloud/v1/{info,userDataByFid,events,userNameProofByName}`, `api.farcaster.xyz/v2/{user-by-username,user}` — interrogés le 27/09/2026 ; https://docs.neynar.com/snapchain/httpapi/userdata ; https://docs.neynar.com/snapchain/datatypes/events (rétention 3 jours) ; https://docs.neynar.com/reference/what-are-the-rate-limits-on-neynar-apis (« Plan update (June 2026) ») ; https://docs.neynar.com/reference/compute-units ; https://docs.neynar.com/reference/publish-webhook ; https://docs.farcaster.xyz/reference/fname/api ; https://docs.farcaster.xyz/reference/farcaster/api ; https://snapchain.farcaster.xyz/getting-started ; https://docs.farcaster.xyz/developers/guides/basics/hello-world (hoyt protégé par mot de passe) ; https://docs.dune.com/data-catalog/community/farcaster/user_data.
 - Nostr : `wss://relay.damus.io` — interrogé le 27/09/2026.
 - Mastodon : `mastodon.social/api/v1/accounts/lookup` — interrogé le 27/09/2026.
 - Telegram : `t.me/durov`, `t.me/binance_announcements`, `t.me/binance` — interrogés le 27/09/2026.
