@@ -287,7 +287,7 @@ class TokenData:
     post_ms: float = math.nan          # instant de décision « après graduation »
 
 
-def fetch_post_grad(cli: pf.PumpFunClient, td: TokenData, ctx_pages: int = 10) -> None:
+def fetch_post_grad(cli: pf.PumpFunClient, td: TokenData, ctx_pages: int = 3) -> None:
     """Fenêtre de décision après la graduation, lue en remontant depuis t.
 
     La bougie où la courbe finit situe la graduation à la minute près ; t = fin de cette bougie
@@ -323,7 +323,7 @@ def moment_times(td: TokenData) -> dict[str, float]:
 
 def fetch_token(cli: pf.PumpFunClient, coin: dict, moments: tuple[str, ...] = MOMENTS,
                 dex_cli: pf.PumpFunClient | None = None, dex_min_trades: int = 20,
-                max_pages: int = 30, ctx_pages: int = 10) -> TokenData:
+                max_pages: int = 30, ctx_pages: int = 3) -> TokenData:
     """Télécharge ce qu'il faut pour évaluer un token à chacun des ``moments``."""
     mint, created = coin["mint"], int(coin["created_timestamp"])
     td = TokenData(coin=coin, candles=fetch_candles(cli, mint, created))

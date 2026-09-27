@@ -96,7 +96,7 @@ def in_sample(mint: str, rate: float) -> bool:
 
 
 def build_dataset(workers: int, max_tokens: int, reuse: bool, costs: pr.Costs,
-                  sample_rate: float = 1.0, cached_only: bool = False) -> tuple[pd.DataFrame, dict]:
+                  sample_rate: float = 1.0, cached_only: bool = False, grad_sample_rate: float = 1.0) -> tuple[pd.DataFrame, dict]:
     U = pf.load_universe()
     now_ms = int(time.time() * 1000)
     info: dict = {"now_ms": now_ms}
@@ -112,11 +112,12 @@ def build_dataset(workers: int, max_tokens: int, reuse: bool, costs: pr.Costs,
     ready = launches[launches["std"] & (launches["created_timestamp"] <= now_ms - 17 * pr.MIN_MS)]
     ready = ready[[in_sample(m, sample_rate) for m in ready["mint"]]]
     info["launch_sample_rate"] = sample_rate
+    info["grad_sample_rate"] = grad_sample_rate
     jobs: dict[str, tuple[dict, tuple[str, ...], str]] = {}
     for c in ready.to_dict("records"):
         jobs[c["mint"]] = (c, pr.MOMENTS, "launches")
     for c in grads[grads["std"]].to_dict("records"):
-        if c["mint"] not in jobs:
+        if c["mint"] not in jobs and in_sample(c["mint"], grad_sample_rate):
             jobs[c["mint"]] = (c, ("post_grad",), "graduations")
     items = list(jobs.values())
     if max_tokens:
@@ -393,12 +394,13 @@ def plot_rates(rates: pd.DataFrame, path: Path) -> None:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--workers", type=int, default=3)
-    ap.add_argument("--sample-rate", type=float, default=0.25, help="part des lancements étudiés (tirage uniforme)")
+    ap.add_argument("--sample-rate", type=float, default=0.20, help="part des lancements étudiés (tirage uniforme)")
     ap.add_argument("--max-tokens", type=int, default=0, help="n'étudier que les N tokens les plus récents (essai)")
     ap.add_argument("--reuse", action="store_true", help="réutiliser le cache par token même s'il n'est pas final")
     ap.add_argument("--size-sol", type=float, default=0.5)
     ap.add_argument("--latency-s", type=float, default=2.0)
     ap.add_argument("--pnl-h", type=int, default=1, help="horizon (h) du P&L de la stratégie top 10 %%")
+    ap.add_argument("--grad-sample-rate", type=float, default=0.5, help="part des graduations étudiées (tirage uniforme)")
     ap.add_argument("--cached-only", action="store_true", help="n'utiliser que les tokens déjà téléchargés")
     ap.add_argument("--report-only", action="store_true", help="relire dataset.parquet sans rien télécharger")
     a = ap.parse_args(argv)
@@ -410,7 +412,7 @@ def main(argv: list[str] | None = None) -> int:
         df = pd.read_parquet(OUT / "dataset.parquet")
         info = json.loads((OUT / "run.json").read_text())
     else:
-        df, info = build_dataset(a.workers, a.max_tokens, a.reuse, costs, a.sample_rate, a.cached_only)
+        df, info = build_dataset(a.workers, a.max_tokens, a.reuse, costs, a.sample_rate, a.cached_only, a.grad_sample_rate)
         if df.empty:
             log.error("aucune ligne : laisser tourner le collecteur")
             return 1
