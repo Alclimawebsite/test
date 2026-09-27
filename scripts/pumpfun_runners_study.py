@@ -25,6 +25,7 @@ détecteur live). Recherche et simulation papier : aucun ordre, aucune clé.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import math
@@ -83,7 +84,13 @@ def load_or_fetch(cli, dex_cli, coin: dict, moments: tuple[str, ...], now_ms: in
     return td
 
 
-def build_dataset(workers: int, max_tokens: int, reuse: bool, costs: pr.Costs) -> tuple[pd.DataFrame, dict]:
+def in_sample(mint: str, rate: float) -> bool:
+    """Tirage uniforme et reproductible d'un lancement (hachage de l'adresse), indépendant de son issue."""
+    return rate >= 1 or (int(hashlib.sha256(mint.encode()).hexdigest()[:8], 16) / 0xFFFFFFFF) < rate
+
+
+def build_dataset(workers: int, max_tokens: int, reuse: bool, costs: pr.Costs,
+                  sample_rate: float = 1.0) -> tuple[pd.DataFrame, dict]:
     U = pf.load_universe()
     now_ms = int(time.time() * 1000)
     info: dict = {"now_ms": now_ms}
@@ -97,6 +104,8 @@ def build_dataset(workers: int, max_tokens: int, reuse: bool, costs: pr.Costs) -
     info["graduations_seen"] = len(grads)
     info["graduations_standard"] = int(grads["std"].sum())
     ready = launches[launches["std"] & (launches["created_timestamp"] <= now_ms - 17 * pr.MIN_MS)]
+    ready = ready[[in_sample(m, sample_rate) for m in ready["mint"]]]
+    info["launch_sample_rate"] = sample_rate
     jobs: dict[str, tuple[dict, tuple[str, ...], str]] = {}
     for c in ready.to_dict("records"):
         jobs[c["mint"]] = (c, pr.MOMENTS, "launches")
@@ -110,7 +119,7 @@ def build_dataset(workers: int, max_tokens: int, reuse: bool, costs: pr.Costs) -
     if items:
         span = [min(c["created_timestamp"] for c, _, _ in items), max(c["created_timestamp"] for c, _, _ in items)]
         info["created_span_ms"] = span
-    cli = pf.PumpFunClient(per_second=4.0)
+    cli = pf.PumpFunClient(per_second=0.33)        # swap-api : ≈ 20 requêtes par minute
     dex_cli = pf.PumpFunClient(per_second=0.9)
     rows, notes, failed = [], {}, 0
     t0 = time.time()
@@ -342,25 +351,60 @@ def pnl_table(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(out)
 
 
+def plot_rates(rates: pd.DataFrame, path: Path) -> None:
+    """Part des runners selon le moment de détection (IC 95 %), une colonne par définition."""
+    from tradebot.report import BG, GRID, TEXT, TEXT_2, _draw_header, _header, _pyplot, _save, _style_axes
+    plt = _pyplot()
+    h = 6 if (rates["h"] == 6).any() else 1
+    tg = [t for t in ("x10", "grad", "mcap1m") if ((rates["target"] == t) & (rates["h"] == h)).any()]
+    if not tg:
+        return
+    W = 10.0
+    title, sub, hh = _header(W, f"Runners pump.fun : ce que change le moment de détection (horizon {h} h)",
+                             "Part des tokens qui deviennent des runners après l'instant t, selon la définition ; "
+                             "barres : IC 95 %.")
+    fig, axes = plt.subplots(1, len(tg), figsize=(W, 3.6 + hh), facecolor=BG, squeeze=False)
+    fig.subplots_adjust(top=1 - hh / (3.6 + hh), bottom=0.2, left=0.2, right=0.98, wspace=0.35)
+    for ax, t in zip(axes[0], tg):
+        d = rates[(rates["target"] == t) & (rates["h"] == h)].set_index("moment").reindex(list(pr.MOMENTS)).dropna(subset=["n"])
+        y = np.arange(len(d))[::-1]
+        ax.errorbar(100 * d["rate"], y, xerr=[100 * (d["rate"] - d["lo"]), 100 * (d["hi"] - d["rate"])], fmt="o",
+                    color="#2a78d6", ecolor="#8a94a3", capsize=3)
+        ax.set_yticks(y, [f"{MOMENT_LABEL[m]} (n={int(n)})" for m, n in zip(d.index, d["n"])] if ax is axes[0][0]
+                      else [""] * len(y), fontsize=8, color=TEXT)
+        ax.set_title(TARGET_LABEL[t], fontsize=10, color=TEXT)
+        ax.set_xlabel("% de runners", fontsize=9, color=TEXT_2)
+        ax.set_xlim(left=0)
+        _style_axes(ax, ygrid=False, xgrid=True)
+    _draw_header(fig, title, sub)
+    _save(fig, path)
+
+
 # ---------------------------------------------------------------------------
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--workers", type=int, default=6)
+    ap.add_argument("--workers", type=int, default=3)
+    ap.add_argument("--sample-rate", type=float, default=0.25, help="part des lancements étudiés (tirage uniforme)")
     ap.add_argument("--max-tokens", type=int, default=0, help="n'étudier que les N tokens les plus récents (essai)")
     ap.add_argument("--reuse", action="store_true", help="réutiliser le cache par token même s'il n'est pas final")
     ap.add_argument("--size-sol", type=float, default=0.5)
     ap.add_argument("--latency-s", type=float, default=2.0)
     ap.add_argument("--pnl-h", type=int, default=1, help="horizon (h) du P&L de la stratégie top 10 %%")
+    ap.add_argument("--report-only", action="store_true", help="relire dataset.parquet sans rien télécharger")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     t0 = time.time()
     costs = pr.Costs(size_sol=a.size_sol, latency_s=a.latency_s)
-    df, info = build_dataset(a.workers, a.max_tokens, a.reuse, costs)
     OUT.mkdir(parents=True, exist_ok=True)
-    if df.empty:
-        log.error("aucune ligne : laisser tourner le collecteur")
-        return 1
-    df.to_parquet(OUT / "dataset.parquet", index=False)
+    if a.report_only:
+        df = pd.read_parquet(OUT / "dataset.parquet")
+        info = json.loads((OUT / "run.json").read_text())
+    else:
+        df, info = build_dataset(a.workers, a.max_tokens, a.reuse, costs, a.sample_rate)
+        if df.empty:
+            log.error("aucune ligne : laisser tourner le collecteur")
+            return 1
+        df.to_parquet(OUT / "dataset.parquet", index=False)
     feats = feature_columns(df)
     rates = runner_rates(df)
     uni = univariate(df, feats)
@@ -370,14 +414,18 @@ def main(argv: list[str] | None = None) -> int:
     for name, t in (("taux_runners", rates), ("variables_auc", uni), ("modeles", mets), ("strategie_top10", strat),
                     ("social", soc), ("pnl_par_moment", pnl)):
         t.to_csv(OUT / f"{name}.csv", index=False)
-    for (m, tg, h), (mdl, f) in models.items():
-        d = target_frame(df, m, tg, h)
+    for (m, tg, h), (_, f) in models.items():
+        d = target_frame(df, m, tg, h)                        # modèle final : toutes les lignes étiquetées
+        mdl = make_model("logit").fit(d[f].to_numpy(float), d["y"].to_numpy())
         export_model(mdl, f, d, {"moment": m, "target": tg, "h": h, "n": len(d), "n_pos": int(d["y"].sum()),
                                  "trained_until_ms": int(d["t_ms"].max())}, OUT / f"modele_{m}_{tg}_{h}h.json")
+    plot_rates(rates, OUT / "taux_runners.png")
     info.update({"rows": len(df), "rows_by_moment": df["moment"].value_counts().to_dict(), "features": feats,
-                 "costs": costs.__dict__, "seconds": round(time.time() - t0)})
+                 "costs": costs.__dict__})
+    if not a.report_only:
+        info["seconds"] = round(time.time() - t0)
     (OUT / "run.json").write_text(json.dumps(info, indent=1, default=str))
-    print(json.dumps({k: info[k] for k in ("rows", "rows_by_moment", "tokens_requested", "tokens_failed", "notes",
+    print(json.dumps({k: info.get(k) for k in ("rows", "rows_by_moment", "tokens_requested", "tokens_failed", "notes",
                                            "seconds")}, indent=1, default=str))
     return 0
 

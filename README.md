@@ -54,6 +54,9 @@ python scripts/polymarket_diagnostic.py                # règles, proxies, basel
 python -m tradebot.polymarket_wallets --hours 48       # trades à la seconde, P&L par wallet
 python scripts/polymarket_top_wallets.py               # top wallets, persistance, copy-trading
 python scripts/polymarket_models_vs_market.py          # nos modèles contre le prix Polymarket
+python scripts/pumpfun_collector.py                    # pump.fun : tous les lancements et graduations, en continu
+python scripts/pumpfun_runners_study.py                # runners pump.fun -> reports/pumpfun_runners/
+python scripts/pumpfun_runner_alerts.py --target x10 --h 6   # détecteur live, papier (alertes dans logs/)
 pytest -m "not network and not slow"                   # tests hors-ligne
 ```
 
@@ -66,6 +69,7 @@ src/tradebot/
   evaluation.py               IC (global, par jour, Newey-West), hit-rate/AUC hors échantillon, FDR, modèles combinés
   forecaster.py backtest.py   TimesFM 3.0 / 2.5, P(hausse) depuis les quantiles ; walk-forward vs baselines
   polymarket*.py              client lecture seule, trades par wallet, backtest modèles vs marché
+  pumpfun*.py                 pump.fun : client lecture seule, variables et étiquettes des runners, signaux sociaux
   report.py cli.py            rapports (CSV, Markdown, PNG) et ligne de commande
 docs/ARCHITECTURE.md          contrat entre modules
 docs/research/                TimesFM, indicateurs, données, méthodologie, Polymarket, temps réel

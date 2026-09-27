@@ -296,7 +296,7 @@ def moment_times(td: TokenData) -> dict[str, float]:
 
 def fetch_token(cli: pf.PumpFunClient, coin: dict, moments: tuple[str, ...] = MOMENTS,
                 dex_cli: pf.PumpFunClient | None = None, dex_min_trades: int = 20,
-                max_pages: int = 30) -> TokenData:
+                max_pages: int = 30, ctx_pages: int = 10) -> TokenData:
     """Télécharge ce qu'il faut pour évaluer un token à chacun des ``moments``."""
     mint, created = coin["mint"], int(coin["created_timestamp"])
     td = TokenData(coin=coin, candles=fetch_candles(cli, mint, created))
@@ -314,24 +314,32 @@ def fetch_token(cli: pf.PumpFunClient, coin: dict, moments: tuple[str, ...] = MO
     if "pre_grad" in moments and np.isfinite(cross) and not (np.isfinite(td.grad_ms) and cross >= td.grad_ms):
         # une seule lecture : la minute du franchissement, la fenêtre qui la précède et une minute après
         dur = float(td.candles.loc[td.candles["ts"] == cross, "dur"].iloc[0])
-        tr = cli.trades(mint, end_ms=int(cross + dur + MIN_MS), start_ms=int(cross - WINDOW_MS), max_pages=max_pages)
+        tr = cli.trades(mint, end_ms=int(cross + dur + 20_000), start_ms=int(cross - WINDOW_MS), max_pages=ctx_pages)
         hit = tr[(tr["price_sol"] >= p50) & (tr["program"] == "pump") & (tr["ts"] >= cross)]
-        if len(hit) and not tr.attrs.get("truncated"):
+        if len(hit):                                   # tronqué : on garde les trades lus (les plus proches de t)
             td.pre_ms = float(hit["ts"].iloc[0])
             td.trades["pre_grad"] = tr
+            if tr.attrs.get("truncated"):
+                td.notes.append("pre_grad_truncated")
         else:
             td.notes.append("pre_grad_not_located")
     if "post_grad" in moments and np.isfinite(td.grad_ms):
         # la bougie situe la fin de courbe à la minute près ; le premier trade PumpSwap la date exactement
         gc = td.grad_ms
-        tr = cli.trades(mint, end_ms=int(gc + POST_GRAD_DELAY_MS + 3 * MIN_MS), start_ms=int(gc - MIN_MS),
-                        max_pages=max_pages)
+        tr = cli.trades(mint, end_ms=int(gc + POST_GRAD_DELAY_MS + 2 * MIN_MS + 20_000), start_ms=int(gc - MIN_MS),
+                        max_pages=ctx_pages)
         amm = tr.loc[tr["program"] == "pump_amm", "ts"]
         if len(amm) and not tr.attrs.get("truncated"):
-            td.grad_ms = float(amm.iloc[0])
-            td.trades["post_grad"] = tr
+            td.grad_ms = float(amm.iloc[0])             # premier trade PumpSwap, vu
+        elif len(amm):
+            # fenêtre tronquée : la graduation est avant le plus ancien trade lu ; t reste postérieur de 5 min
+            # au moins à la fin de courbe (bougie + 1 min), les variables portent sur les trades lus
+            td.grad_ms = gc + MIN_MS
+            td.notes.append("post_grad_truncated")
         else:
             td.notes.append("post_grad_not_located")
+        if np.isfinite(td.grad_ms) and len(amm):
+            td.trades["post_grad"] = tr
     n_launch = len(td.trades.get("launch", []))
     if dex_cli is not None and (n_launch >= dex_min_trades or np.isfinite(cross)):
         try:

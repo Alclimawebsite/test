@@ -16,6 +16,8 @@ Faits vérifiés sur les API (27/09/2026)
   les ≈ 1050 derniers lancements (≈ 55 min) et les ≈ 1050 dernières graduations (≈ 22 h).
   Un historique complet des lancements exige donc un collecteur qui tourne en continu
   (``scripts/pumpfun_collector.py``).
+* ``swap-api.pump.fun`` est limité à ≈ 20 requêtes par minute et par adresse IP (au-delà :
+  429 et ``Retry-After: 60``) : lire tous les lancements est impossible, l'étude échantillonne.
 * ``swap-api.pump.fun/v2/coins/{mint}/trades`` : ``limit`` ≤ 100, du plus récent au plus
   ancien, ``pagination.nextCursor = "{slotIndexId}-{timestamp ms}"``. **Un curseur forgé
   ``"9999999999999999999999-{t ms}"`` saute directement aux trades antérieurs à t** : on peut
@@ -142,7 +144,8 @@ class PumpFunClient:
 
     def get(self, url: str, params: dict | None = None) -> Any:
         err: Exception | None = None
-        for k in range(self.tries):
+        fails = throttled = 0
+        while fails < self.tries and throttled < 60:
             self.rl.wait()
             try:
                 r = self.s.get(url, params=params, timeout=self.timeout)
@@ -151,13 +154,16 @@ class PumpFunClient:
                 if r.status_code in (400, 404, 410):
                     raise ValueError(f"{r.status_code} {url} {r.text[:200]}")
                 err = RuntimeError(f"HTTP {r.status_code} {r.text[:120]}")
-                if r.status_code == 429:                 # Cloudflare 1015 : on ralentit tout le client
-                    self.rl.penalize(10.0)
+                if r.status_code == 429:                 # Cloudflare : on attend ce qu'il demande, pour tout le client
+                    throttled += 1
+                    self.rl.penalize(float(r.headers.get("Retry-After") or 30) + 1)
+                    continue
             except ValueError:
                 raise
             except Exception as exc:  # noqa: BLE001 — réseau : on réessaie
                 err = exc
-            time.sleep(min(30.0, 1.5 * 2 ** k))
+            fails += 1
+            time.sleep(min(30.0, 1.5 * 2 ** fails))
         raise RuntimeError(f"échec {url} {params} : {err!r}")
 
     # -- listes ---------------------------------------------------------------
