@@ -129,8 +129,9 @@ Trois points à connaître :
   `CDN-Cache: HIT` : la **même URL renvoie la même réponse pendant 30 s**. C'est le même piège que la
   Data API Polymarket (`polymarket_temps_reel.md` § 3.2). Un paramètre anti-cache (`&_=<ns>`) donne
   `CDN-Cache: MISS` à chaque appel. Le client `SocialClient.bluesky()` l'ajoute par défaut. Le PDS
-  annonce son quota : `ratelimit-policy: 3000;w=300` (3 000 requêtes par 5 min et par IP) ; l'AppView
-  public n'envoie pas d'en-tête de quota.
+  annonce son quota : `ratelimit-policy: 3000;w=300` (3 000 requêtes par 5 min et par IP, chiffre
+  documenté pour les hôtes PDS `*.host.bsky.network`) ; l'AppView public n'envoie pas d'en-tête de
+  quota et sa documentation parle de limites « généreuses », sans chiffre.
 - **L'avatar et la bannière portent le CID de l'image** dans leur URL
   (`cdn.bsky.app/img/avatar/plain/<did>/<cid>@jpeg`) : l'URL change si et seulement si l'image change.
   Pas besoin de télécharger l'image.
@@ -147,7 +148,21 @@ C'est gratuit et complet depuis la création du compte.
 pousse, pour **tous** les comptes du réseau, chaque écriture de l'enregistrement de profil (`commit`,
 opérations `create` / `update` / `delete`, avec l'enregistrement complet), plus les événements
 `identity` (changement de handle ou de document DID : il faut re-résoudre le handle, l'événement ne le
-porte pas) et `account` (`active`, `deactivated`, `takendown`, `suspended`, `deleted`).
+porte pas) et `account` (`active`, `deactivated`, `takendown`, `suspended`, `deleted`, `desynchronized`,
+`throttled`). La version 2 (`wss://jetstream.us-east.bsky.network/xrpc/network.bsky.jetstream.subscribeEvents?collections=app.bsky.actor.profile&dids=…`)
+accepte un **filtre côté serveur jusqu'à 10 000 DID** et 100 collections : on ne reçoit alors que les
+comptes suivis. D'ici **[mesuré]** : 24 messages en 15 s sans filtre de DID, connexion acceptée et
+silencieuse avec un filtre sur deux comptes inactifs ; chaque message v2 (`payload` de type
+`network.bsky.jetstream.subscribeEvents#c`) porte `did, operation, record, cid, rev, seq` et l'heure
+serveur de l'événement (`time`, `witnessedAt`), donc la **date exacte du changement**. Pas d'authentification pour le direct, non facturé ;
+fenêtre de rattrapage par curseur de 36 h (72 h sur le relais brut `com.atproto.sync.subscribeRepos`,
+`wss://relay1.us-east.bsky.network`, qui livre tout le réseau en binaire sans filtre). Au-delà, *Network
+Replay* (clé d'API, facturé au volume, quota non publié) permet de rejouer l'historique des événements de
+DID choisis. Les dépôts eux-mêmes ne gardent que l'état courant : **pas d'anciennes versions du profil**
+hors ce rejeu. Le statut d'un compte se lit aussi à la demande : `com.atproto.sync.getRepoStatus?did=`
+(`active`, `status`), ou l'erreur de `getProfile` (« Account has been suspended », « Account is
+deactivated », « Profile not found »). `plc.directory/export/stream` pousse toutes les opérations
+d'identité du réseau (changements de handle et de PDS).
 
 | Session F (600 s) | Compte | Par minute | Par jour (extrapolé) |
 |---|---|---|---|
@@ -231,7 +246,7 @@ couvre que les publications, pas les profils : c'est du *poll + diff* propre, à
 
 | Réseau | Source | Couvre | Dates par champ | Délai | Contrainte |
 |---|---|---|---|---|---|
-| Bluesky | Jetstream / firehose | tous les comptes | `indexedAt` (profil), journal PLC (handle) | ≈ 0,3 s | aucune ; ≈ 1,4 msg/s après filtre |
+| Bluesky | Jetstream (filtre par collection et par DID) / firehose | tous les comptes | `indexedAt` (profil), heure de l'événement, journal PLC (handle) | ≈ 0,3 s | aucune ; ≈ 2 msg/s après filtre ; CGU sans clause anti-collecte (14/08/2025), interdiction de contourner les limites |
 | Farcaster | événements de hub (HTTP paginé ou gRPC) | tous les comptes | **oui** | ≈ 1 s (blocs) | hub à jour requis (payant ou nœud propre, ou ports ouverts) |
 | Nostr | relais, `kind 0` | tous les comptes | **oui** (`created_at`) | ≈ 1,5 s | historique non garanti |
 | Mastodon | — | — | non | *poll* | 300 req / 5 min / IP |
@@ -574,7 +589,7 @@ memecoins, études d'événement et vitesse de réaction).*
 
 *(complétées avec la lecture contradictoire)*
 
-- Bluesky : `public.api.bsky.app` (`app.bsky.actor.getProfile`, `getProfiles`, `com.atproto.repo.getRecord`), `plc.directory/<did>/log/audit`, Jetstream `wss://jetstream2.us-east.bsky.network/subscribe` — interrogés le 27/09/2026.
+- Bluesky : `public.api.bsky.app` (`app.bsky.actor.getProfile`, `getProfiles`, `com.atproto.repo.getRecord`), `plc.directory/<did>/log/audit`, Jetstream `wss://jetstream2.us-east.bsky.network/subscribe` et `wss://jetstream.us-east.bsky.network/xrpc/network.bsky.jetstream.subscribeEvents` — interrogés le 27/09/2026 ; https://bsky.network/docs/jetstream/ ; https://bsky.network/docs/jetstream-replay ; https://bsky.network/docs/rate-limits/ ; https://atproto.com/blog/relay-rollout (24/01/2026) ; lexiques `com/atproto/sync/subscribeRepos.json`, `app/bsky/actor/getProfiles.json` (github.com/bluesky-social/atproto) ; https://bsky.social/about/support/tos (14/08/2025) ; https://bsky.social/about/support/community-guidelines (19/09/2025) ; https://bsky.network/docs/developer-guidelines.
 - Farcaster : `hub.pinata.cloud/v1/{info,userDataByFid,events,userNameProofByName}`, `api.farcaster.xyz/v2/{user-by-username,user}` — interrogés le 27/09/2026.
 - Nostr : `wss://relay.damus.io` — interrogé le 27/09/2026.
 - Mastodon : `mastodon.social/api/v1/accounts/lookup` — interrogé le 27/09/2026.

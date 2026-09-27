@@ -79,7 +79,9 @@ WARPCAST_URL = FARCASTER_CLIENT_URL
 TELEGRAM_WEB_URL = "https://t.me"
 X_API_URL = "https://api.x.com/2"
 PLC_URL = "https://plc.directory"
-JETSTREAM_URL = "wss://jetstream2.us-east.bsky.network/subscribe"
+JETSTREAM_URL = "wss://jetstream2.us-east.bsky.network/subscribe"  # ?wantedCollections=app.bsky.actor.profile
+#: Jetstream v2 : filtre côté serveur ``collections=`` (≤ 100) et ``dids=`` (≤ 10 000), enveloppe différente.
+JETSTREAM_V2_URL = "wss://jetstream.us-east.bsky.network/xrpc/network.bsky.jetstream.subscribeEvents"
 
 USER_AGENT = "tradebot-research/0.1 (lecture seule, profils publics)"
 
